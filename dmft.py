@@ -1,44 +1,37 @@
-import math
+class DMFT(object):
+    def __init__(self):
+        pass
 
-import matplotlib.pyplot as plt
-import numpy as np
-import scipy
-import scipy.linalg
-inv = scipy.linalg.inv
-
-def tb(n):
+def kernel(dmft, hcore_kpts, eri, freqs, wts, delta, conv_tol):
     """
-    Tight-binding Hamiltonian
+    DMFT self-consistency
+
+    Modeled after PySCF HF kernel
     """
-    h=np.zeros([n,n])
+    dmft_conv = False
+    cycle = 0
 
-    for i in range(n):
-        for j in range(n):
-            if abs(i-j)==1:
-                h[i,j]=1.
-    h[0,-1]=1.
-    h[-1,0]=1.
-    return h
+    # get initial guess
+    hyb = get_hyb(hcore_kpts, np.zeros_like(hcore_kpts[0,:,:]),
+                  freqs, delta)
+    
+    while not dmft_conv and cycle < max(1, dmft.max_cycle):
+        hyb_last = hyb
+        sigma = get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta)
+        hyb = get_hyb(hcore_kpts, sigma, freqs, delta)
+        norm_hyb = numpy.linalg.norm(hyb-hyb_last)
 
+        # this would be a good place to put DIIS
+        # or damping
+        
+        if (norm_hyb < conv_tol):
+            dmft_conv = True
 
-def make_hyb(bath_v, bath_e, freqs, delta):
-    """
-    Convert bath couplings and energies
-    back to hybridization
-    """
-    nimp = bath_v.shape[0]
-    nbath = bath_e.shape[0]
-    nw = len(freqs)
-    hyb = np.zeros([nimp, nimp, nw], np.complex128)
+        cycle +=1
 
-    for iw, w in enumerate(freqs):
-        for p in range(nimp):
-            for q in range(nimp):
-                for b in range(nbath):
-                    hyb[p,q,iw] += bath_v[p,b] * bath_v[q,b] / (w-bath_e[b]+1j*delta)
-    return hyb
-
-def hyb_to_bath(hyb, freqs):
+    return hyb, sigma
+    
+def get_bath(hyb, freqs, wts):
     """
     Convert hybridization function 
     to bath couplings and energies
@@ -46,9 +39,9 @@ def hyb_to_bath(hyb, freqs):
     Args:
         hyb : (nimp, nimp, nw) ndarray
         freqs : (nw) ndarray
+        wts : (nw) ndarray, Gaussian wts at freq pts
 
     Returns:
-
         bath_v : (nimp, nimp*nw) ndarray
         bath_e : (nimp*nw) ndarray
     """
@@ -58,11 +51,11 @@ def hyb_to_bath(hyb, freqs):
 
     dw = (wh - wl) / (nw - 1)
     # Eq. (6), arxiv:1507.07468
-    v2 = -1./np.pi * np.imag(hyb) * dw
+    v2 = -1./np.pi * np.imag(hyb)
 
     # simple discretization of bath, Eq. (9), arxiv:1507.07468
     v = np.empty_like(v2)
-    
+
     for iw in range(nw):
         eig, vec = scipy.linalg.eigh(v2[:,:,iw])
 
@@ -71,7 +64,7 @@ def hyb_to_bath(hyb, freqs):
         neg_eig = [e for e in eig if e < 0]
         assert np.allclose(neg_eig, 0)
 
-        v[:,:,iw] = np.dot(vec, np.diag(np.abs(eig))**0.5)
+        v[:,:,iw] = np.dot(vec, np.diag(np.abs(eig))**0.5) * math.sqrt(wts[iw])
 
     nimp = hyb.shape[0]
     bath_v = np.reshape(v, [nimp, -1])
@@ -82,66 +75,90 @@ def hyb_to_bath(hyb, freqs):
     for ip in range(nimp):
         for iw in range(nw):
             bath_e[ip*nw + iw] = freqs[iw]
-        
+
     return bath_v, bath_e
 
-def test():
+def get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta):
     """
-    Main test routine
+    Impurity self energy
     """
-    # n: number of sites
-    n=100
-    nimp = 4
+    hcore_cell = 1./nkpts * numpy.sum(hcore_kpts, axis=0)
 
-    htb=tb(n)
-
-    # frequency range
-    wl,wh=-8,8
-    delta = .5 * (wh-wl) / n
-    freqs = np.arange(wl,wh,0.1)
-    nw = len(freqs)
-
-    # full lattice GF
-    full_gf=np.zeros([n,n,nw], np.complex128)
-
-    # Compute reference DOS
-    for iw, w in enumerate(freqs):
-        full_gf[:,:,iw]=inv((w+1j*delta)*np.eye(n)-htb)
-
-    exact_dos= -1./np.pi * 1./n * np.imag(np.einsum("iiw->w", full_gf))
-    imp_dos = -1./np.pi * np.imag(full_gf[0,0,:])
-
-    # Compute hybridization, and fit bath couplings
-    imp_gf0 = np.zeros([nimp,nimp,nw], np.complex128)
-    hyb = np.zeros([nimp,nimp,nw], np.complex128)
-    for iw, w in enumerate(freqs):
-        imp_gf0[:,:,iw] = inv((w + 1j*delta) * np.eye(nimp) - htb[:nimp,:nimp])
-        hyb[:,:,iw] = inv(imp_gf0[:,:,iw]) - inv(full_gf[:nimp,:nimp,iw])
-
-    bath_v, bath_e = hyb_to_bath(hyb, freqs)
-
-    # # Check hybridization
-    # hyb2 = make_hyb(bath_v, bath_e, freqs, delta)
-    # for iw, w in enumerate(freqs):
-    #     print hyb[0,0, iw], hyb2[0,0,iw]
-
-
-    # Setup impurity Hamiltonian including bath couplings
-    # and diagonal bath energies
+    # bath representation of hybridization
+    bath_v, bath_e = get_bath(hyb, freqs, wts)
     nbath = len(bath_e)
-    himp = np.zeros([nimp + nbath, nimp + nbath])
-    himp[:nimp,:nimp] = htb[:nimp,:nimp]
-    himp[:nimp, nimp:] = bath_v
-    himp[nimp:, :nimp] = bath_v.T
-    himp[nimp:,nimp:] = np.diag(bath_e)
+    himp = np.zeros([nao + nbath, nao + nbath])
+    himp[:nao,:nao] = hcore_cell
+    himp[:nao, nao:] = bath_v
+    himp[nao:, :nao] = bath_v.T
+    himp[nao:,nao:] = np.diag(bath_e)
 
-    # Compute impurity Green's function
-    imp_gf2 = np.zeros([nimp+nbath,nimp+nbath,nw], np.complex128)
+    gf_imp = get_interacting_gf(himp, eri, freqs, delta) # This is the impurity solver
+    gf0_imp = get_gf(himp, np.zeros_like(himp), freqs, delta)[:nao,:nao]
+    
+    sigma = np.zeros_like(gf_imp)
+    for iw in range(nw):
+        sigma[:,:,iw] = inv(gf0_imp[:,:,iw]) - inv(gf_imp[:,:,iw])
+    return sigma
+    
+def get_hyb(hcore_kpts, sigma, freqs, delta):
+    """
+    Hybridization
+    """
+    nkpts = hcore_kpts.shape[0]
+    nao = hcore_kpts.shape[1]
+    nw = len(freqs)
+    
+    gf_kpts = get_gf_kpts(hcore_kpts, sigma, freqs, delta)
+    gf_cell = 1./nkpts * numpy.sum(gf_kpts, axis=0)
+    hcore_cell = 1./nkpts * numpy.sum(hcore_kpts, axis=0)
+
+    gf0_cell = get_gf(hcore_cell, sigma, freqs, delta)
+
+    hyb = np.zeros_like(gf0_imp)
+    for iw in range(nw):
+        hyb[:,:,iw] = inv(gf0_cell[:,:,iw]) - inv(gf_cell[:,:,iw])
+
+    return hyb
+
+def get_gf_kpts(hcore_kpts, sigma, freqs, delta):
+    """
+    kpt Green's function at a set of frequencies
+
+    Args: 
+         hcore_kpts : (nkpts, nao, nao) ndarray
+         sigma : (nao, nao) ndarray
+         freqs : (nw) ndarray
+         delta : float
+
+    Returns:
+         gf_kpts : (nkpts, nao, nao) ndarray
+    """
+    nkpts = hcore_kpts.shape[0]
+    nao = hcore_kpts.shape[1]
+    gf_kpts = np.zeros([nkpts, nao, nao, nw], np.complex128)
+
+    for k in range(nkpts):
+        gf_kpts[k,:,:,:] = get_gf(hcore_kpts[k,:,:], sigma, delta)
+    return gf_kpts
+    
+def get_gf(hcore, sigma, freqs, delta):
+    """
+    Green's function at a set of frequencies
+
+    Args: 
+         hcore : (nao, nao) ndarray
+         sigma : (nao, nao) ndarray
+         freqs : (nw) ndarray
+         delta : float
+
+    Returns:
+         gf : (nao, nao) ndarray
+
+    """
+    nao = hcore.shape[0]
+    nw  = len(freqs)
+    gf = np.zeros([nao, nao, nw], np.complex128)
     for iw, w in enumerate(freqs):
-        imp_gf2[:,:,iw]=inv((w+1j*delta)*np.eye(nimp+nbath)-himp)
-
-    imp_dos2 = -1./np.pi * np.imag(imp_gf2[0,0,:])
-
-    plt.plot(freqs, imp_dos2)
-    plt.plot(freqs, imp_dos)
-    plt.show()
+        gf[:,:,iw] = inv((w+1j*delta)*np.eye(nao)-hcore-sigma)
+    return gf
