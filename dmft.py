@@ -1,5 +1,68 @@
+import math
+import numpy as np
+import numpy.polynomial.legendre
+import scipy
+import scipy.linalg
+inv = scipy.linalg.inv
+
+import pyscf
+import pyscf.gto as gto
+import pyscf.scf as scf
+import pyscf.ao2mo as ao2mo
+
+import matplotlib.pyplot as plt
+
+def _get_delta(h):
+    """
+    Rough estimate of broadening from spectrum of h
+    """
+    n = h.shape[0]
+    eigs = scipy.linalg.eigvalsh(h)
+    # the factor of 2. is just an empirical estimate
+    return 2. * (max(eigs) - min(eigs)) / (n-1.)
+
+def _tb(n):
+    """
+    Tight-binding Hamiltonian
+    """
+    h=np.zeros([n,n])
+
+    for i in range(n):
+        for j in range(n):
+            if abs(i-j)==1:
+                h[i,j]=1.
+    h[0,-1]=1.
+    h[-1,0]=1.
+    return h
+
+def _get_scaled_legendre_roots(wl, wh, nw):
+    """
+    Scale nw Legendre roots, which lie in the
+    interval [-1, 1], so that they lie in [wl, wh]
+
+    Returns:
+        freqs : 1D ndarray
+        wts : 1D ndarray
+    """
+    freqs, wts = numpy.polynomial.legendre.leggauss(n)
+    freqs *= (wh - wl) / 2. + (wh + wl) / 2.
+    wts *= (wh - wl) / 2.
+    
+    return freqs, wts
+
+def _get_linear_freqs(wl, wh, nw):
+    freqs = np.linspace(wl, wh, nw) 
+    wts = np.ones([nw]) * (wh - wl) / (nw - 1.)
+    return freqs, wts
+
+
+
 class DMFT(object):
+    """
+    DMFT calculation object
+    """
     def __init__(self):
+        # fill in later
         pass
 
 def kernel(dmft, hcore_kpts, eri, freqs, wts, delta, conv_tol):
@@ -12,14 +75,16 @@ def kernel(dmft, hcore_kpts, eri, freqs, wts, delta, conv_tol):
     cycle = 0
 
     # get initial guess
-    hyb = get_hyb(hcore_kpts, np.zeros_like(hcore_kpts[0,:,:]),
-                  freqs, delta)
+    nao = hcore_kpts.shape[1]
+    nw = len(freqs)
+    sigma = np.zeros([nao, nao, nw])
+    hyb = get_hyb(hcore_kpts, sigma, freqs, delta)
     
     while not dmft_conv and cycle < max(1, dmft.max_cycle):
         hyb_last = hyb
         sigma = get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta)
         hyb = get_hyb(hcore_kpts, sigma, freqs, delta)
-        norm_hyb = numpy.linalg.norm(hyb-hyb_last)
+        norm_hyb = np.linalg.norm(hyb-hyb_last)
 
         # this would be a good place to put DIIS
         # or damping
@@ -82,7 +147,9 @@ def get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta):
     """
     Impurity self energy
     """
-    hcore_cell = 1./nkpts * numpy.sum(hcore_kpts, axis=0)
+    nkpts, nao, nao = hcore_kpts.shape
+    
+    hcore_cell = 1./nkpts * np.sum(hcore_kpts, axis=0)
 
     # bath representation of hybridization
     bath_v, bath_e = get_bath(hyb, freqs, wts)
@@ -93,14 +160,59 @@ def get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta):
     himp[nao:, :nao] = bath_v.T
     himp[nao:,nao:] = np.diag(bath_e)
 
-    gf_imp = get_interacting_gf(himp, eri, freqs, delta) # This is the impurity solver
-    gf0_imp = get_gf(himp, np.zeros_like(himp), freqs, delta)[:nao,:nao]
+    gf_imp = get_interacting_gf(himp, eri, freqs, delta)[:nao,:nao,:] # This is the impurity solver
+
+    nw = len(freqs)
+    hyb = np.zeros([nao+nbath,nao+nbath,nw])
+    gf0_imp = get_gf(himp, hyb, freqs, delta)[:nao,:nao,:]
     
     sigma = np.zeros_like(gf_imp)
+    nw = len(freqs)
     for iw in range(nw):
         sigma[:,:,iw] = inv(gf0_imp[:,:,iw]) - inv(gf_imp[:,:,iw])
+
     return sigma
     
+
+def get_interacting_gf(himp, eri_imp, freqs, delta):
+    n = himp.shape[0]
+    nimp = eri_imp.shape[0]
+    
+    mol = gto.M()
+    mol.nelectron = n # only half-filling
+
+    mf = scf.RHF(mol)
+    mf.verbose = 4
+    
+    eri = np.zeros([n,n,n,n])
+    eri[:nimp,:nimp,:nimp,:nimp] = eri_imp
+
+    mf.get_hcore = lambda *args: himp
+    mf.get_ovlp = lambda *args: np.eye(n)
+    mf._eri = ao2mo.restore(8, eri, n)
+
+    # Another way to generate initial guess is to set .init_guess attribute to '1e'
+    mf.init_guess = '1e'
+
+    mf.scf()
+    
+    dm = mf.make_rdm1()
+    print dm
+    print "--------"
+    print dm[0,0]
+    
+    print mf.mo_energy
+    print mf.mo_coeff
+
+    nw = len(freqs)
+    gf = np.zeros([n, n, nw], np.complex128)
+
+    for iw, w in enumerate(freqs):
+        resolvent = np.diag(1./((w + 1j*delta) * np.ones([n],np.complex128) - mf.mo_energy))
+        gf[:,:,iw] = np.dot(mf.mo_coeff, np.dot(resolvent, mf.mo_coeff.T))
+
+    return gf
+
 def get_hyb(hcore_kpts, sigma, freqs, delta):
     """
     Hybridization
@@ -110,12 +222,12 @@ def get_hyb(hcore_kpts, sigma, freqs, delta):
     nw = len(freqs)
     
     gf_kpts = get_gf_kpts(hcore_kpts, sigma, freqs, delta)
-    gf_cell = 1./nkpts * numpy.sum(gf_kpts, axis=0)
-    hcore_cell = 1./nkpts * numpy.sum(hcore_kpts, axis=0)
+    gf_cell = 1./nkpts * np.sum(gf_kpts, axis=0)
+    hcore_cell = 1./nkpts * np.sum(hcore_kpts, axis=0)
 
     gf0_cell = get_gf(hcore_cell, sigma, freqs, delta)
 
-    hyb = np.zeros_like(gf0_imp)
+    hyb = np.zeros_like(gf0_cell)
     for iw in range(nw):
         hyb[:,:,iw] = inv(gf0_cell[:,:,iw]) - inv(gf_cell[:,:,iw])
 
@@ -134,12 +246,13 @@ def get_gf_kpts(hcore_kpts, sigma, freqs, delta):
     Returns:
          gf_kpts : (nkpts, nao, nao) ndarray
     """
+    nw = len(freqs)
     nkpts = hcore_kpts.shape[0]
     nao = hcore_kpts.shape[1]
     gf_kpts = np.zeros([nkpts, nao, nao, nw], np.complex128)
 
     for k in range(nkpts):
-        gf_kpts[k,:,:,:] = get_gf(hcore_kpts[k,:,:], sigma, delta)
+        gf_kpts[k,:,:,:] = get_gf(hcore_kpts[k,:,:], sigma, freqs, delta)
     return gf_kpts
     
 def get_gf(hcore, sigma, freqs, delta):
@@ -160,5 +273,41 @@ def get_gf(hcore, sigma, freqs, delta):
     nw  = len(freqs)
     gf = np.zeros([nao, nao, nw], np.complex128)
     for iw, w in enumerate(freqs):
-        gf[:,:,iw] = inv((w+1j*delta)*np.eye(nao)-hcore-sigma)
+        gf[:,:,iw] = inv((w+1j*delta)*np.eye(nao)-hcore-sigma[:,:,iw])
     return gf
+
+def test():
+    nao = 1
+    nlat = 100
+    htb = _tb(nlat)
+    eigs = scipy.linalg.eigvalsh(htb)
+    htb_k = np.reshape(eigs, [nlat,nao,nao])
+    U = 0
+    eri = np.zeros([nao,nao,nao,nao])
+    eri[0,0,0,0] = U
+    dmft = DMFT()
+    dmft.max_cycle = 10
+    wl, wh = -6, 6
+    nw = 99
+    delta = _get_delta(htb)
+    conv_tol = 1.e-6
+    freqs, wts = _get_linear_freqs(wl, wh, nw)
+    
+    hyb, sigma = kernel(dmft, htb_k, eri, freqs, wts, delta, conv_tol)
+
+    conv_gf = get_gf_kpts(htb_k, sigma, freqs, delta)
+    init_gf = get_gf_kpts(htb_k, np.zeros_like(sigma), freqs, delta)
+    conv_imp_gf = 1./nlat * np.sum(conv_gf, axis=0)
+    init_imp_gf = 1./nlat * np.sum(init_gf, axis=0)
+
+    conv_imp_dos = -1./np.pi * np.imag(np.reshape(conv_imp_gf, [nw]))
+    init_imp_dos = -1./np.pi * np.imag(np.reshape(init_imp_gf, [nw]))
+
+    print sigma
+    
+    plt.plot(freqs, conv_imp_dos)
+    plt.plot(freqs, init_imp_dos)
+    plt.show()
+   
+    
+        
