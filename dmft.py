@@ -7,7 +7,8 @@ inv = scipy.linalg.inv
 
 import pyscf
 import pyscf.gto as gto
-import pyscf.scf as scf
+#import pyscf.scf as scf
+import scf_mu as scf
 import pyscf.ao2mo as ao2mo
 
 import matplotlib.pyplot as plt
@@ -82,7 +83,7 @@ def kernel(dmft, hcore_kpts, eri, freqs, wts, delta, conv_tol):
     
     while not dmft_conv and cycle < max(1, dmft.max_cycle):
         hyb_last = hyb
-        sigma = get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta)
+        sigma = get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta, dmft.mu)
         hyb = get_hyb(hcore_kpts, sigma, freqs, delta)
         norm_hyb = np.linalg.norm(hyb-hyb_last)
 
@@ -143,7 +144,7 @@ def get_bath(hyb, freqs, wts):
 
     return bath_v, bath_e
 
-def get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta):
+def get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta, mu=0):
     """
     Impurity self energy
     """
@@ -160,7 +161,7 @@ def get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta):
     himp[nao:, :nao] = bath_v.T
     himp[nao:,nao:] = np.diag(bath_e)
 
-    gf_imp = get_interacting_gf(himp, eri, freqs, delta)[:nao,:nao,:] # This is the impurity solver
+    gf_imp = get_interacting_gf(himp, eri, freqs, delta, mu)[:nao,:nao,:] # This is the impurity solver
 
     nw = len(freqs)
     hyb = np.zeros([nao+nbath,nao+nbath,nw])
@@ -174,15 +175,19 @@ def get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta):
     return sigma
     
 
-def get_interacting_gf(himp, eri_imp, freqs, delta):
+def get_interacting_gf(himp, eri_imp, freqs, delta, mu=0):
     n = himp.shape[0]
     nimp = eri_imp.shape[0]
     
     mol = gto.M()
-    mol.nelectron = n # only half-filling
+    mol.build()
+    #mol.nelectron = n # only half-filling
 
-    mf = scf.RHF(mol)
+    mf = scf.RHF(mol, mu)
     mf.verbose = 4
+    mf.mo_energy = np.zeros([n])
+    mf.mo_energy[:n/2] = mf.mu-0.01
+    mf.mo_energy[n/2:] = mf.mu+0.01
     
     eri = np.zeros([n,n,n,n])
     eri[:nimp,:nimp,:nimp,:nimp] = eri_imp
@@ -282,11 +287,13 @@ def test():
     htb = _tb(nlat)
     eigs = scipy.linalg.eigvalsh(htb)
     htb_k = np.reshape(eigs, [nlat,nao,nao])
-    U = 0
+    U = 4
+    mu = U/2
     eri = np.zeros([nao,nao,nao,nao])
     eri[0,0,0,0] = U
     dmft = DMFT()
     dmft.max_cycle = 10
+    dmft.mu = mu
     wl, wh = -6, 6
     nw = 99
     delta = _get_delta(htb)
