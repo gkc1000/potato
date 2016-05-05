@@ -87,7 +87,8 @@ def kernel(dmft, hcore_kpts, eri, freqs, wts, delta, conv_tol):
     
     while not dmft_conv and cycle < max(1, dmft.max_cycle):
         hyb_last = hyb
-        sigma = get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta, dmft.mu)
+        sigma = get_sigma(hcore_kpts, eri, hyb, freqs, \
+                          wts, delta, dmft.mu)
         hyb = get_hyb(hcore_kpts, sigma, freqs, delta)
         norm_hyb = np.linalg.norm(hyb-hyb_last)
 
@@ -165,9 +166,10 @@ def get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta, mu=0):
     himp[nao:, :nao] = bath_v.T
     himp[nao:,nao:] = np.diag(bath_e)
 
-    interacting_gf_ccsd(himp, eri, freqs, delta, mu)#[:nao,:nao,:]
-    # gf_imp = get_interacting_gf(himp, eri, freqs, delta, mu)[:nao,:nao,:]
-    # This is the impurity solver
+    #gf_imp = get_interacting_gf_ccsd(himp, eri, freqs, \
+    #                                 delta, mu)[:nao,:nao,:]
+    gf_imp = get_interacting_gf_scf (himp, eri, freqs, \
+                                    delta, mu)[:nao,:nao,:]
 
     nw = len(freqs)
     hyb = np.zeros([nao+nbath,nao+nbath,nw])
@@ -181,7 +183,7 @@ def get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta, mu=0):
     return sigma
     
 
-def get_interacting_gf(himp, eri_imp, freqs, delta, mu=0):
+def get_interacting_gf_scf (himp, eri_imp, freqs, delta, mu=0):
     n = himp.shape[0]
     nimp = eri_imp.shape[0]
     
@@ -209,7 +211,6 @@ def get_interacting_gf(himp, eri_imp, freqs, delta, mu=0):
     print 'MO energies :\n'
     print mf.mo_energy
     print '----\n'
-    mf.make_rdm1()  # fix occupations
 
     nw = len(freqs)
     gf = np.zeros([n, n, nw], np.complex128)
@@ -221,7 +222,7 @@ def get_interacting_gf(himp, eri_imp, freqs, delta, mu=0):
 
     return gf
 
-def interacting_gf_ccsd (himp, eri_imp, freqs, delta, mu=0):
+def get_interacting_gf_ccsd (himp, eri_imp, freqs, delta, mu=0):
     # follow MF code below to get the MF solution
     n = himp.shape[0]
     nimp = eri_imp.shape[0]
@@ -253,7 +254,6 @@ def interacting_gf_ccsd (himp, eri_imp, freqs, delta, mu=0):
     print 'MO energies :'
     print mf.mo_energy
     print '----\n'
-    mf.make_rdm1()  # fix occupations
 
     print "Solving CCSD equations..."
     cc = ccsd.CCSD(mf)
@@ -296,7 +296,7 @@ def interacting_gf_ccsd (himp, eri_imp, freqs, delta, mu=0):
     gip_ao = np.einsum('ip,pqw,qj->ijw',mf.mo_coeff,gip,mf.mo_coeff.T)
     gea_ao = np.einsum('ip,pqw,qj->ijw',mf.mo_coeff,gea,mf.mo_coeff.T)
 
-    assert (False)
+    return gip_ao.conj()+gea_ao
 
 
 def get_hyb(hcore_kpts, sigma, freqs, delta):
@@ -364,7 +364,7 @@ def get_gf(hcore, sigma, freqs, delta):
 
 def test():
     nao = 1
-    nlat = 20
+    nlat = 128
     htb = _tb(nlat)
     eigs = scipy.linalg.eigvalsh(htb)
     htb_k = np.reshape(eigs, [nlat,nao,nao])
@@ -376,7 +376,7 @@ def test():
     dmft.max_cycle = 10
     dmft.mu = mu
     wl, wh = -6, 6
-    nw = 5
+    nw = 63
     delta = _get_delta(htb)
     conv_tol = 1.e-6
     freqs, wts = _get_linear_freqs(wl, wh, nw)
