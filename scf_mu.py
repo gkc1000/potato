@@ -5,10 +5,6 @@ import pyscf.scf as scf
 
 from pyscf.lib import logger
 
-def make_rdm1(mo_coeff, mo_energy, mu):
-    mocc = mo_coeff[:,mo_energy<=mu]
-    return numpy.dot(2*mocc, mocc.T.conj())
-
 class RHF(scf.hf.RHF):
     __doc__ = scf.hf.SCF.__doc__
 
@@ -17,10 +13,12 @@ class RHF(scf.hf.RHF):
         scf.hf.SCF.__init__ (self, mol)
 
     def make_rdm1 (self, mo_coeff=None, mo_occ=None):
-        # if mo_occ is None: mo_occ = self.mo_occ
-        if mo_coeff is None: mo_coeff = self.mo_coeff
         mo_energy = self.mo_energy
-        return make_rdm1(mo_coeff, mo_energy, self.mu)
+        if mo_coeff is None: mo_coeff = self.mo_coeff
+        mo_occ = numpy.zeros_like(mo_energy)
+        mo_occ[mo_energy<=self.mu] = 2.
+        self.mo_occ = mo_occ
+        return scf.hf.make_rdm1(mo_coeff, mo_occ)
 
     def init_guess_by_1e(self, mol=None):
         if mol is None: mol = self.mol
@@ -31,5 +29,5 @@ class RHF(scf.hf.RHF):
         # mo_energy, mo_coeff = self.eig(h1e, s1e)
         # mo_occ = self.get_occ(mo_energy, mo_coeff)
         # return self.make_rdm1(mo_coeff, mo_occ)
-        return self.make_rdm1(self.mo_coeff, None)
+        return self.make_rdm1(self.mo_coeff)
 

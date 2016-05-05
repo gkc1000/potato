@@ -9,7 +9,11 @@ import pyscf
 import pyscf.gto as gto
 #import pyscf.scf as scf
 import scf_mu as scf
+import pyscf.cc.ccsd as ccsd
+import pyscf.cc.rccsd_eom as rccsd_eom
 import pyscf.ao2mo as ao2mo
+
+import greens_function
 
 import matplotlib.pyplot as plt
 
@@ -161,7 +165,9 @@ def get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta, mu=0):
     himp[nao:, :nao] = bath_v.T
     himp[nao:,nao:] = np.diag(bath_e)
 
-    gf_imp = get_interacting_gf(himp, eri, freqs, delta, mu)[:nao,:nao,:] # This is the impurity solver
+    interacting_gf_ccsd(himp, eri, freqs, delta, mu)#[:nao,:nao,:]
+    # gf_imp = get_interacting_gf(himp, eri, freqs, delta, mu)[:nao,:nao,:]
+    # This is the impurity solver
 
     nw = len(freqs)
     hyb = np.zeros([nao+nbath,nao+nbath,nw])
@@ -184,7 +190,8 @@ def get_interacting_gf(himp, eri_imp, freqs, delta, mu=0):
     #mol.nelectron = n # only half-filling
 
     mf = scf.RHF(mol, mu)
-    mf.verbose = 4
+    # mf.verbose = 4
+    mf.max_memory = 1000
     mf.mo_energy = np.zeros([n])
     mf.mo_energy[:n/2] = mf.mu-0.01
     mf.mo_energy[n/2:] = mf.mu+0.01
@@ -195,28 +202,102 @@ def get_interacting_gf(himp, eri_imp, freqs, delta, mu=0):
     mf.get_hcore = lambda *args: himp
     mf.get_ovlp = lambda *args: np.eye(n)
     mf._eri = ao2mo.restore(8, eri, n)
-
-    # Another way to generate initial guess is to set .init_guess attribute to '1e'
-    mf.init_guess = '1e'
+    mf.init_guess = '1e'  # currently needed
 
     mf.scf()
-    
-    dm = mf.make_rdm1()
-    print dm
-    print "--------"
-    print dm[0,0]
-    
+    print 'MF energy = %20.12f\n' % (mf.e_tot)
+    print 'MO energies :\n'
     print mf.mo_energy
-    print mf.mo_coeff
+    print '----\n'
+    mf.make_rdm1()  # fix occupations
 
     nw = len(freqs)
     gf = np.zeros([n, n, nw], np.complex128)
 
+    dm = mf.make_rdm1()
     for iw, w in enumerate(freqs):
         resolvent = np.diag(1./((w + 1j*delta) * np.ones([n],np.complex128) - mf.mo_energy))
         gf[:,:,iw] = np.dot(mf.mo_coeff, np.dot(resolvent, mf.mo_coeff.T))
 
     return gf
+
+def interacting_gf_ccsd (himp, eri_imp, freqs, delta, mu=0):
+    # follow MF code below to get the MF solution
+    n = himp.shape[0]
+    nimp = eri_imp.shape[0]
+
+    CISD = False
+    mol = gto.M()
+    mol.build()
+    mol.incore_anyway = True
+    # needed so that CCSD ao2mo runs properly
+    #mol.nelectron = n # only half-filling
+
+    mf = scf.RHF(mol, mu)
+    # mf.verbose = 4
+    mf.max_memory = 1000
+    mf.mo_energy = np.zeros([n])
+    mf.mo_energy[:n/2] = mf.mu-0.01
+    mf.mo_energy[n/2:] = mf.mu+0.01
+    
+    eri = np.zeros([n,n,n,n])
+    eri[:nimp,:nimp,:nimp,:nimp] = eri_imp
+
+    mf.get_hcore = lambda *args: himp
+    mf.get_ovlp = lambda *args: np.eye(n)
+    mf._eri = ao2mo.restore(8, eri, n)
+    mf.init_guess = '1e'  # currently needed
+
+    mf.scf()
+    print 'MF energy = %20.12f' % (mf.e_tot)
+    print 'MO energies :'
+    print mf.mo_energy
+    print '----\n'
+    mf.make_rdm1()  # fix occupations
+
+    print "Solving CCSD equations..."
+    cc = ccsd.CCSD(mf)
+    ecc = cc.ccsd()[0]
+    print "CCSD corr = %20.12f" % (ecc)
+
+    print "Solving lambda equations..."
+    cc.solve_lambda()
+
+    print "Repeating with EOM CCSD"
+    cc_eom = rccsd_eom.RCCSD(mf)
+
+    def ao2mofn_ (mol, bas, compact):
+        return ao2mo.incore.general(mf._eri, bas, compact=compact)
+
+    eri_eom = rccsd_eom._ERIS(cc_eom, ao2mofn=ao2mofn_)
+    ecc_eom = cc_eom.ccsd(eris=eri_eom)[0]
+    print "EOM-CCSD corr = %20.12f" % (ecc_eom)
+
+    #cc_eom.t1 = cc.t1
+    #cc_eom.t2 = cc.t2
+    cc_eom.l1 = cc.l1
+    cc_eom.l2 = cc.l2
+
+    if CISD == True:
+        cc_eom.t1 *= 1e-5
+        cc_eom.t2 *= 1e-5
+        cc_eom.l1 *= 1e-5
+        cc_eom.l2 *= 1e-5
+
+    nbas = n
+    nw = len(freqs)
+    gip = np.zeros((nbas,nbas,nw),np.complex)
+    gea = np.zeros((nbas,nbas,nw),np.complex)
+    gf = greens_function.greens_function()
+    # Calculate full (p,q) GF matrix in MO basis
+    gip, gea = gf.solve_gf(cc_eom,range(nbas),range(nbas),freqs,delta)
+
+    # Change basis from MO to AO
+    gip_ao = np.einsum('ip,pqw,qj->ijw',mf.mo_coeff,gip,mf.mo_coeff.T)
+    gea_ao = np.einsum('ip,pqw,qj->ijw',mf.mo_coeff,gea,mf.mo_coeff.T)
+
+    assert (False)
+
 
 def get_hyb(hcore_kpts, sigma, freqs, delta):
     """
@@ -283,7 +364,7 @@ def get_gf(hcore, sigma, freqs, delta):
 
 def test():
     nao = 1
-    nlat = 100
+    nlat = 20
     htb = _tb(nlat)
     eigs = scipy.linalg.eigvalsh(htb)
     htb_k = np.reshape(eigs, [nlat,nao,nao])
@@ -295,7 +376,7 @@ def test():
     dmft.max_cycle = 10
     dmft.mu = mu
     wl, wh = -6, 6
-    nw = 99
+    nw = 5
     delta = _get_delta(htb)
     conv_tol = 1.e-6
     freqs, wts = _get_linear_freqs(wl, wh, nw)
@@ -316,5 +397,3 @@ def test():
     plt.plot(freqs, init_imp_dos)
     plt.show()
    
-    
-        
