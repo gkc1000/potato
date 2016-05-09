@@ -52,7 +52,7 @@ def integrate():
     print "real-axis", scipy.integrate.quad(a_fn,-6.,mu)
 
     def imag_fn(w):
-        return -2./np.pi * np.trace(gf(1j*w+mu, delta))
+        return -2./np.pi * np.real(np.trace(gf(1j*w+mu, delta)))
 
     assert nao == gf(0, delta).shape[0]
 
@@ -74,10 +74,10 @@ def integrate():
     print "real axis, E1", scipy.integrate.quad(e1_fn,-8.,mu)
 
     def imag_e0_fn(w):
-        return -2./np.pi * np.trace(np.dot(gf(1j*w + mu,delta), sigma0(1j*w + mu, nao)))
+        return -2./np.pi * np.real(np.trace(np.dot(gf(1j*w + mu,delta), sigma0(1j*w + mu, nao))))
                                     
     def imag_e1_fn(w):
-        return -2./np.pi * np.trace(np.dot(gf(1j*w + mu,delta), sigma1(1j*w + mu, nao)))
+        return -2./np.pi * np.real(np.trace(np.dot(gf(1j*w + mu,delta), sigma1(1j*w + mu, nao))))
 
     # energy due to constant self-energy
     # This can be obtained once the density matrix is computed
