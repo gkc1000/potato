@@ -14,6 +14,7 @@ import pyscf.cc.rccsd_eom as rccsd_eom
 import pyscf.ao2mo as ao2mo
 
 import greens_function
+import numint_
 
 import matplotlib.pyplot as plt
 
@@ -49,10 +50,11 @@ def _get_scaled_legendre_roots(wl, wh, nw):
         freqs : 1D ndarray
         wts : 1D ndarray
     """
-    freqs, wts = numpy.polynomial.legendre.leggauss(n)
-    freqs *= (wh - wl) / 2. + (wh + wl) / 2.
+    freqs, wts = numpy.polynomial.legendre.leggauss(nw)
+    freqs += 1
+    freqs *= (wh - wl) / 2.
+    freqs += wl
     wts *= (wh - wl) / 2.
-    
     return freqs, wts
 
 def _get_linear_freqs(wl, wh, nw):
@@ -79,16 +81,19 @@ def kernel(dmft, hcore_kpts, eri, freqs, wts, delta, conv_tol):
     dmft_conv = False
     cycle = 0
 
+    nkpts, nao, nao = hcore_kpts.shape
+    hcore_cell = 1./nkpts * np.sum(hcore_kpts, axis=0)
+
     # get initial guess
-    nao = hcore_kpts.shape[1]
     nw = len(freqs)
     sigma = np.zeros([nao, nao, nw])
     hyb = get_hyb(hcore_kpts, sigma, freqs, delta)
     
     while not dmft_conv and cycle < max(1, dmft.max_cycle):
         hyb_last = hyb
-        sigma = get_sigma(hcore_kpts, eri, hyb, freqs, \
-                          wts, delta, dmft.mu)
+        bath_v, bath_e = get_bath(hyb, freqs, wts)
+        sigma = get_sigma(freqs, hcore_cell, eri, bath_v, \
+                          bath_e, delta, dmft.mu)
         hyb = get_hyb(hcore_kpts, sigma, freqs, delta)
         norm_hyb = np.linalg.norm(hyb-hyb_last)
 
@@ -149,37 +154,31 @@ def get_bath(hyb, freqs, wts):
 
     return bath_v, bath_e
 
-def get_sigma(hcore_kpts, eri, hyb, freqs, wts, delta, mu=0):
+def get_sigma(freqs, hcore_cell, eri, bath_v, bath_e, delta, mu=0):
     """
     Impurity self energy
     """
-    nkpts, nao, nao = hcore_kpts.shape
-    
-    hcore_cell = 1./nkpts * np.sum(hcore_kpts, axis=0)
 
-    # bath representation of hybridization
-    bath_v, bath_e = get_bath(hyb, freqs, wts)
+    nao = hcore_cell.shape[0]
     nbath = len(bath_e)
-    himp = np.zeros([nao + nbath, nao + nbath])
+    himp = np.zeros([nao+nbath, nao+nbath])
     himp[:nao,:nao] = hcore_cell
-    himp[:nao, nao:] = bath_v
-    himp[nao:, :nao] = bath_v.T
+    himp[:nao,nao:] = bath_v
+    himp[nao:,:nao] = bath_v.T
     himp[nao:,nao:] = np.diag(bath_e)
 
     #gf_imp = get_interacting_gf_ccsd(himp, eri, freqs, \
     #                                 delta, mu)[:nao,:nao,:]
     gf_imp = get_interacting_gf_scf (himp, eri, freqs, \
-                                    delta, mu)[:nao,:nao,:]
+                                     delta, mu)[:nao,:nao,:]
 
     nw = len(freqs)
-    hyb = np.zeros([nao+nbath,nao+nbath,nw])
-    gf0_imp = get_gf(himp, hyb, freqs, delta)[:nao,:nao,:]
-    
+    sigma = np.zeros([nao+nbath,nao+nbath,nw])
+    gf0_imp = get_gf(himp, sigma, freqs, delta)[:nao,:nao,:]
+ 
     sigma = np.zeros_like(gf_imp)
-    nw = len(freqs)
     for iw in range(nw):
         sigma[:,:,iw] = inv(gf0_imp[:,:,iw]) - inv(gf_imp[:,:,iw])
-
     return sigma
     
 
@@ -215,11 +214,11 @@ def get_interacting_gf_scf (himp, eri_imp, freqs, delta, mu=0):
     nw = len(freqs)
     gf = np.zeros([n, n, nw], np.complex128)
 
-    dm = mf.make_rdm1()
     for iw, w in enumerate(freqs):
-        resolvent = np.diag(1./((w + 1j*delta) * np.ones([n],np.complex128) - mf.mo_energy))
-        gf[:,:,iw] = np.dot(mf.mo_coeff, np.dot(resolvent, mf.mo_coeff.T))
-
+        resolvent = np.diag(1./((w+1j*delta) * \
+                            np.ones([n],np.complex128) - mf.mo_energy))
+        gf[:,:,iw] = np.dot(mf.mo_coeff, np.dot(resolvent, \
+                                                mf.mo_coeff.T))
     return gf
 
 def get_interacting_gf_ccsd (himp, eri_imp, freqs, delta, mu=0):
@@ -284,18 +283,21 @@ def get_interacting_gf_ccsd (himp, eri_imp, freqs, delta, mu=0):
         cc_eom.l1 *= 1e-5
         cc_eom.l2 *= 1e-5
 
-    nbas = n
     nw = len(freqs)
-    gip = np.zeros((nbas,nbas,nw),np.complex)
-    gea = np.zeros((nbas,nbas,nw),np.complex)
+    gip = np.zeros((n,n,nw), np.complex128)
+    gea = np.zeros((n,n,nw), np.complex128)
     gf = greens_function.greens_function()
     # Calculate full (p,q) GF matrix in MO basis
-    gip, gea = gf.solve_gf(cc_eom,range(nbas),range(nbas),freqs,delta)
+    gip, gea = gf.solve_gf(cc_eom, range(n), range(n), freqs, delta)
 
     # Change basis from MO to AO
-    gip_ao = np.einsum('ip,pqw,qj->ijw',mf.mo_coeff,gip,mf.mo_coeff.T)
-    gea_ao = np.einsum('ip,pqw,qj->ijw',mf.mo_coeff,gea,mf.mo_coeff.T)
-
+    gip_ao = np.zeros([n, n, nw], np.complex128)
+    gea_ao = np.zeros([n, n, nw], np.complex128)
+    for iw in range(nw):
+        gip_ao[:,:,iw] = np.dot(mf.mo_coeff, np.dot(gip[:,:,iw], \
+                                                mf.mo_coeff.T))
+        gea_ao[:,:,iw] = np.dot(mf.mo_coeff, np.dot(gea[:,:,iw], \
+                                                mf.mo_coeff.T))
     return gip_ao.conj()+gea_ao
 
 
@@ -303,21 +305,20 @@ def get_hyb(hcore_kpts, sigma, freqs, delta):
     """
     Hybridization
     """
-    nkpts = hcore_kpts.shape[0]
-    nao = hcore_kpts.shape[1]
     nw = len(freqs)
-    
+    nkpts, nao, nao = hcore_kpts.shape
+
     gf_kpts = get_gf_kpts(hcore_kpts, sigma, freqs, delta)
     gf_cell = 1./nkpts * np.sum(gf_kpts, axis=0)
-    hcore_cell = 1./nkpts * np.sum(hcore_kpts, axis=0)
 
+    hcore_cell = 1./nkpts * np.sum(hcore_kpts, axis=0)
     gf0_cell = get_gf(hcore_cell, sigma, freqs, delta)
 
     hyb = np.zeros_like(gf0_cell)
     for iw in range(nw):
         hyb[:,:,iw] = inv(gf0_cell[:,:,iw]) - inv(gf_cell[:,:,iw])
-
     return hyb
+
 
 def get_gf_kpts(hcore_kpts, sigma, freqs, delta):
     """
@@ -333,8 +334,7 @@ def get_gf_kpts(hcore_kpts, sigma, freqs, delta):
          gf_kpts : (nkpts, nao, nao) ndarray
     """
     nw = len(freqs)
-    nkpts = hcore_kpts.shape[0]
-    nao = hcore_kpts.shape[1]
+    nkpts, nao, nao = hcore_kpts.shape
     gf_kpts = np.zeros([nkpts, nao, nao, nw], np.complex128)
 
     for k in range(nkpts):
@@ -355,8 +355,8 @@ def get_gf(hcore, sigma, freqs, delta):
          gf : (nao, nao) ndarray
 
     """
-    nao = hcore.shape[0]
     nw  = len(freqs)
+    nao = hcore.shape[0]
     gf = np.zeros([nao, nao, nw], np.complex128)
     for iw, w in enumerate(freqs):
         gf[:,:,iw] = inv((w+1j*delta)*np.eye(nao)-hcore-sigma[:,:,iw])
@@ -364,36 +364,55 @@ def get_gf(hcore, sigma, freqs, delta):
 
 def test():
     nao = 1
-    nlat = 128
+    nlat = 32
+    U = 4.
+    mu = U/2
+
     htb = _tb(nlat)
     eigs = scipy.linalg.eigvalsh(htb)
     htb_k = np.reshape(eigs, [nlat,nao,nao])
-    U = 4
-    mu = U/2
     eri = np.zeros([nao,nao,nao,nao])
     eri[0,0,0,0] = U
+    htb_cell = 1./nlat * np.sum(htb_k, axis=0)
+
     dmft = DMFT()
     dmft.max_cycle = 10
     dmft.mu = mu
     wl, wh = -6, 6
-    nw = 63
+    nw = 31
     delta = _get_delta(htb)
     conv_tol = 1.e-6
     freqs, wts = _get_linear_freqs(wl, wh, nw)
     
     hyb, sigma = kernel(dmft, htb_k, eri, freqs, wts, delta, conv_tol)
+    bath_v, bath_e = get_bath(hyb, freqs, wts)
 
-    conv_gf = get_gf_kpts(htb_k, sigma, freqs, delta)
-    init_gf = get_gf_kpts(htb_k, np.zeros_like(sigma), freqs, delta)
-    conv_imp_gf = 1./nlat * np.sum(conv_gf, axis=0)
-    init_imp_gf = 1./nlat * np.sum(init_gf, axis=0)
+    # conv_gf = get_gf_kpts(htb_k, sigma, freqs, delta)
+    # init_gf = get_gf_kpts(htb_k, np.zeros_like(sigma), freqs, delta)
+    # conv_imp_gf = 1./nlat * np.sum(conv_gf, axis=0)
+    # init_imp_gf = 1./nlat * np.sum(init_gf, axis=0)
 
-    conv_imp_dos = -1./np.pi * np.imag(np.reshape(conv_imp_gf, [nw]))
-    init_imp_dos = -1./np.pi * np.imag(np.reshape(init_imp_gf, [nw]))
-
-    print sigma
+    # conv_imp_dos = -1./np.pi * np.imag(np.reshape(conv_imp_gf, [nw]))
+    # init_imp_dos = -1./np.pi * np.imag(np.reshape(init_imp_gf, [nw]))
     
-    plt.plot(freqs, conv_imp_dos)
-    plt.plot(freqs, init_imp_dos)
-    plt.show()
+    # plt.plot(freqs, conv_imp_dos)
+    # plt.plot(freqs, init_imp_dos)
+    # plt.show()
+
+    sigma_ = sigma[:,:,0:1].real
+    #sigma_ = np.zeros([nao,nao,1])
+
+    def _eval(w, delta):
+        #sigma_ = _eval_sigma(w, delta)
+        gf_kpts = get_gf_kpts(htb_k, sigma_, [w], delta)
+        gf_cell = 1./nlat * np.sum(gf_kpts, axis=0)[:,:,0]
+        return np.trace(gf_cell)
+
+    nint_n = numint_.int_quad_real (_eval, \
+                                    epsrel=1.0e-5)
+    nint_n = numint_.int_quad_imag (_eval, mu, \
+                                    epsrel=1.0e-5)
+
+    # nint_i += numint_.int_quad_imag (_eval_XX, mu, \
+    #                                    epsrel=1.0e-5)
    
