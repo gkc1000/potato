@@ -92,13 +92,14 @@ def initial_ea_guess(cc):
     return cc.amplitudes_to_vector_ea(vector1,vector2)
 
 class greens_function:
-    def __init__(self):
-        pass    
+    def __init__(self, verbose=0):
+        self.verbose = verbose
 
     def solve_ip(self,cc,ps,qs,omega_list,broadening):
         if not isinstance(ps, collections.Iterable): ps = [ps]
         if not isinstance(qs, collections.Iterable): qs = [qs]
-        print " solving ip portion..."
+        if self.verbose > 0:
+            print " solving ip portion..."
         x0 = initial_ip_guess(cc)
         p0 = 0.0*x0 + 1.0
         e_vector = list() 
@@ -124,7 +125,8 @@ class greens_function:
     def solve_ea(self,cc,ps,qs,omega_list,broadening):
         if not isinstance(ps, collections.Iterable): ps = [ps]
         if not isinstance(qs, collections.Iterable): qs = [qs]
-        print " solving ea portion..."
+        if self.verbose > 0:
+            print " solving ea portion..."
         x0 = initial_ea_guess(cc)
         p0 = 0.0*x0 + 1.0
         e_vector = list() 

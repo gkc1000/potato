@@ -3,17 +3,17 @@ import scipy
 import scipy.integrate
 
 
-def int_quad_real (gf_fn, delta=1.e-5, \
+def int_quad_real (gf_fn, mu, x0=-np.inf, delta=1.e-5, \
                    epsabs=1.49e-08, epsrel=1.49e-08):
     assert (callable(gf_fn))
 
     def real_fn(w):
         return -1./np.pi * np.imag(gf_fn(w, delta))
 
-    int_ = scipy.integrate.quad(real_fn, 0, +np.inf, epsabs=epsabs, \
+    int_ = scipy.integrate.quad(real_fn, x0, +mu, epsabs=epsabs, \
                                 epsrel=epsrel, full_output=1)
     print 'neval = ', int_[2]['neval']
-    print 'integral = ', int_[0]
+    print 'integ = ', int_[0], int_[1]
     return int_[0]
 
 
@@ -27,6 +27,6 @@ def int_quad_imag (gf_fn, mu, delta=1.e-5, \
     int_ = scipy.integrate.quad(imag_fn, 0, +np.inf, epsabs=epsabs, \
                                 epsrel=epsrel, full_output=1)
     print 'neval = ', int_[2]['neval']
-    print 'integral = ', int_[0]
+    print 'integ = ', int_[0], int_[1]
     return int_[0]
 
