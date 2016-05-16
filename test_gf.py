@@ -64,7 +64,7 @@ def mf_gf (freqs, delta, mo_coeff, mo_energy, nocc):
     for iw, w in enumerate(freqs):
         g_ip = np.diag(1./((w+1j*delta) * \
                 np.ones([nocc],np.complex128) - mo_energy[:nocc]))
-        g_ea = np.diag(1./((w-1j*delta) * \
+        g_ea = np.diag(1./((w+1j*delta) * \
                 np.ones([n-nocc],np.complex128) - mo_energy[nocc:]))
         g_ip_ = np.dot(mo_coeff[:,:nocc], np.dot(g_ip, \
                                                  mo_coeff[:,:nocc].T))
@@ -80,8 +80,10 @@ def cc_gf (freqs, delta, cc_eom, mo_coeff, mo_energy):
     gea = np.zeros((n,n,nw), np.complex128)
     gf = greens_function.greens_function()
     # Calculate full (p,q) GF matrix in MO basis
-    g_ip, g_ea = gf.solve_gf(cc_eom, range(n), range(n), \
-                             freqs, -delta)
+    g_ip = gf.solve_ip(cc_eom, range(n), range(n), \
+                       freqs.conj(), delta).conj()
+    g_ea = gf.solve_ea(cc_eom, range(n), range(n), \
+                       freqs, delta)
 
     # Change basis from MO to AO
     gf = np.zeros([n, n, nw], np.complex128)
@@ -112,7 +114,7 @@ def fci_gf (freqs, delta, mo_coeff, energy_gs, gs_vector, \
         gf_ = (ReGF.reshape((n,n), order='F') + \
                1j*ImGF.reshape((n,n), order='F')).T
 
-        ReGF, ImGF = theFCI.GFmatrix_add (wr+energy_gs, -1.0, wi-delta, \
+        ReGF, ImGF = theFCI.GFmatrix_add (wr+energy_gs, -1.0, wi+delta, \
                 orbsLeft, orbsRight, 1, gs_vector, HamCheMPS2)
         gf_ += ReGF.reshape((n,n), order='F') + \
                1j*ImGF.reshape((n,n), order='F')
@@ -152,7 +154,7 @@ def test():
     nao = 2
     U = 2.0
 
-    solver = 'fci'  # 'scf', 'cc', 'fci'
+    solver = 'cc'  # 'scf', 'cc', 'fci'
 
     htb = -1*_tb(nao)
     eri = np.zeros([nao,nao,nao,nao])
