@@ -85,9 +85,10 @@ def cc_gf (freqs, delta, cc_eom, mo_coeff, mo_energy):
                                                  mo_coeff.T))
         gea_ao[:,:,iw] = np.dot(mo_coeff, np.dot(gea[:,:,iw], \
                                                  mo_coeff.T))
-    return gip_ao.conj()+gea_ao
+    return gip_ao+gea_ao
 
-def fci_gf (freqs, delta, n, energy_gs, gs_vector, HamCheMPS2, theFCI):
+def fci_gf (freqs, delta, mo_coeff, energy_gs, gs_vector, HamCheMPS2, theFCI):
+    n  = mo_coeff.shape[0]
     nw = len(freqs)
     gf = np.zeros([n, n, nw], np.complex128)
 
@@ -101,7 +102,7 @@ def fci_gf (freqs, delta, n, energy_gs, gs_vector, HamCheMPS2, theFCI):
         else:
             wr = w
             wi = 0.
-        ReGF, ImGF = theFCI.GFmatrix_rem (wr-energy_gs, 1.0, -(wi-delta), \
+        ReGF, ImGF = theFCI.GFmatrix_rem (wr-energy_gs, 1.0, wi+delta, \
                 orbsLeft, orbsRight, 1, gs_vector, HamCheMPS2)
         gf_ = (ReGF.reshape((n,n), order='F') + \
                1j*ImGF.reshape((n,n), order='F')).T
@@ -110,7 +111,7 @@ def fci_gf (freqs, delta, n, energy_gs, gs_vector, HamCheMPS2, theFCI):
                 orbsLeft, orbsRight, 1, gs_vector, HamCheMPS2)
         gf_ += ReGF.reshape((n,n), order='F') + \
                1j*ImGF.reshape((n,n), order='F')
-        gf[:,:,iw] = gf_
+        gf[:,:,iw] = np.dot(mo_coeff, np.dot(gf_, mo_coeff.T))
     return gf
 
 def fci_sol (h0, h1, eri, nel):
@@ -146,7 +147,7 @@ def test():
     nao = 2
     U = 2.0
 
-    solver = 'fci'  # 'scf', 'cc', 'fci'
+    solver = 'cc'  # 'scf', 'cc', 'fci'
 
     htb = -1*_tb(nao)
     eri = np.zeros([nao,nao,nao,nao])
@@ -216,6 +217,10 @@ def test():
 
     evals, evecs = scipy.linalg.eigh(htb)
 
+    mu = ( mf.mo_energy[mol.nelectron//2-1] + \
+           mf.mo_energy[mol.nelectron//2] )/2.
+    mu += 0.05
+
     delta_ = 1.e-4
     def _gf (w, delta):
         if solver == 'scf':
@@ -223,14 +228,14 @@ def test():
         elif solver == 'cc':
             return cc_gf (w, delta, cc_eom, mf.mo_coeff, mf.mo_energy)
         elif solver == 'fci':
-            return fci_gf (w, delta, nao, en_FCIgs, GSvector, \
+            return fci_gf (w, delta, mf.mo_coeff, en_FCIgs, GSvector, \
                            HamCheMPS2, theFCI)
     def _sigma (w, delta):
         gf0 = mf_gf (w, delta, evecs, evals)
         gf1 = _gf (w, delta)
         return get_sigma (w, gf0, gf1)
 
-    freqs_, wts_ = _get_linear_freqs(-10., 10., 128)
+    freqs_ = _get_linear_freqs(-10., 10., 128)[0]
     gf0 = mf_gf (freqs_, delta, evecs, evals)
     gf1 = _gf (freqs_, delta)
     dos0 = np.zeros([freqs_.shape[0]])
@@ -242,17 +247,14 @@ def test():
     plt.plot(freqs_, dos0)
     plt.plot(freqs_, dos1)
     plt.show()
-
-    mu = ( mf.mo_energy[mol.nelectron//2-1] + \
-           mf.mo_energy[mol.nelectron//2] )/2.
-    mu += 0.05
+    sigma_inf = _sigma([1j*1000000.+mu], delta_)
+    print sigma_inf
 
     def _eval_p(w, delta):
         return _gf([w], delta)
     def _eval_n(w, delta):
         return np.trace(_eval_p(w, delta)[:,:,0])
 
-    sigma_inf = _sigma([1j*1000000.+mu], delta_)
     def _eval_en0(w, delta):
         return np.trace(np.dot(sigma_inf[:,:,0], \
                                _gf([w], delta)[:,:,0]))
@@ -268,32 +270,32 @@ def test():
     def imag_fn(w, gf_fn):
         return -2./np.pi * np.real(gf_fn(1j*w+mu, delta_))
 
-    fnr = np.zeros_like(freqs_)
-    fni0 = np.zeros_like(freqs_)
-    fni1 = np.zeros_like(freqs_)
-    fni2 = np.zeros_like(freqs_)
-    fni3 = np.zeros_like(freqs_)
-    wmin = np.min(freqs_)
-    wmax = np.max(freqs_)
-    for iw, w in enumerate(freqs_):
-        fnr[iw] = real_fn(w+mu, _eval_n)
-        fni0[iw] = imag_fn(w, _eval_n)
-        fni1[iw] = imag_fn(w, _eval_en0)
-        fni2[iw] = imag_fn(w, _eval_en1)
-        fni3[iw] = imag_fn(w, _eval_enc)
+    # fnr = np.zeros_like(freqs_)
+    # fni0 = np.zeros_like(freqs_)
+    # fni1 = np.zeros_like(freqs_)
+    # fni2 = np.zeros_like(freqs_)
+    # fni3 = np.zeros_like(freqs_)
+    # wmin = np.min(freqs_)
+    # wmax = np.max(freqs_)
+    # for iw, w in enumerate(freqs_):
+    #     fnr[iw] = real_fn(w+mu, _eval_n)
+    #     fni0[iw] = imag_fn(w, _eval_n)
+    #     fni1[iw] = imag_fn(w, _eval_en0)
+    #     fni2[iw] = imag_fn(w, _eval_en1)
+    #     fni3[iw] = imag_fn(w, _eval_enc)
 
-    plt.plot(freqs_+mu, fnr)
-    plt.figure()
-    plt.plot(freqs_, fni0)
-    plt.figure()
-    plt.plot(freqs_, fni1)
-    plt.figure()
-    plt.plot(freqs_, fni2)
-    plt.figure()
-    plt.plot(freqs_, fni3)
-    plt.show()
+    # plt.plot(freqs_+mu, fnr)
+    # plt.figure()
+    # plt.plot(freqs_, fni0)
+    # plt.figure()
+    # plt.plot(freqs_, fni1)
+    # plt.figure()
+    # plt.plot(freqs_, fni2)
+    # plt.figure()
+    # plt.plot(freqs_, fni3)
+    # plt.show()
 
-    lr = False
+    lr = True
 
     # NL = # poles to left of mu, NR = # poles to right of mu
     # nao = NL + NR
