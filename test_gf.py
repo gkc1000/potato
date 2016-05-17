@@ -286,7 +286,7 @@ def test():
         else:
             return np.trace(np.dot(sigma[:,:,0]-sigma_infr, gf_[:,:,0]))
 
-    lplt = True
+    lplt = False
 
     if lplt:
         def real_fn(w, gf_fn):

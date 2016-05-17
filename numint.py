@@ -2,6 +2,8 @@ import numpy as np
 import numpy.polynomial
 import scipy.integrate
 
+import matplotlib.pyplot as plt
+
 def _get_scaled_legendre_roots(wl, wh, nw):
     """
     Scale nw Legendre roots, which lie in the
@@ -12,13 +14,10 @@ def _get_scaled_legendre_roots(wl, wh, nw):
         wts : 1D ndarray
     """
     freqs, wts = numpy.polynomial.legendre.leggauss(nw)
-    freqs +=1 
+    freqs += 1
     freqs *= (wh - wl) / 2.
-    freqs += wl 
+    freqs += wl
     wts *= (wh - wl) / 2.
-
-    print "sum", np.sum(wts)
-    
     return freqs, wts
 
 def _get_linear_freqs(wl, wh, nw):
@@ -214,10 +213,13 @@ def test():
 
     # spectral fn helper
     def a_fn(w):
-        return -1./np.pi * np.imag(np.trace(gf0(w, delta)))
+        return -1./np.pi * np.imag(np.trace(gf0(w, delta, nao)))
 
     def imag_fn(w):
-        return -2./np.pi * np.real(np.trace(gf0(1j*w+mu, delta)))
+        print w, 1j*w+mu
+        z = -2./np.pi * np.real(np.trace(gf0(1j*w+mu, delta, nao)))
+        #assert (False)
+        return -2./np.pi * np.real(np.trace(gf0(1j*w+mu, delta, nao)))
 
     #print "frequencies", freqs
     #print freqs[ngauss]
@@ -235,8 +237,24 @@ def test():
     # print "num int", n
 
     
-    print "real-axis", scipy.integrate.quad(a_fn,-6.,mu)  
-    print "imag up to wcut", scipy.integrate.quad(imag_fn, 0, wcut)
-    print "imag wcut to inf", scipy.integrate.quad(imag_fn, wcut, 10000)
-  
-    #print "imag-axis", np.trace(gf_int)
+    print "real-axis", scipy.integrate.quad(a_fn,-np.inf,mu)  
+    i1 = scipy.integrate.quad(imag_fn, 0, wcut, full_output=True)
+    i2 = scipy.integrate.quad(imag_fn, wcut, +np.inf, full_output=True)
+    it = scipy.integrate.quad(imag_fn, 0, +np.inf, full_output=True)
+
+    print "imag up to wcut", i1[0]
+    print "imag wcut to inf", i2[0]
+    print "neval: ", i1[2]['neval'] + i2[2]['neval']
+    print "imag up to inf", it[0]
+    print "neval: ", it[2]['neval']
+
+    freqs, wts = _get_linear_freqs(0., wcut, npts)
+
+    evals = np.zeros_like(freqs)
+    for k in range(len(freqs)):
+        evals[k] = imag_fn(freqs[k])
+    plt.plot(freqs, evals)
+    plt.show()
+
+
+
