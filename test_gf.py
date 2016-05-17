@@ -50,8 +50,8 @@ def _get_linear_freqs(wl, wh, nw):
     wts = np.ones([nw]) * (wh - wl) / (nw - 1.)
     return freqs, wts
 
-def get_sigma(freqs, mf_gf, corr_gf):
-    nw = len(freqs)
+def get_sigma(mf_gf, corr_gf):
+    nw = mf_gf.shape[2]
     sigma = np.zeros_like(mf_gf)
     for iw in range(nw):
         sigma[:,:,iw] = inv(mf_gf[:,:,iw]) - inv(corr_gf[:,:,iw])
@@ -151,10 +151,10 @@ def fci_sol (h0, h1, eri, nel):
     return HamCheMPS2, theFCI, GSvector, EnergyCheMPS2
 
 def test():
-    nao = 2
-    U = 2.0
+    nao = 10
+    U = 1.0
 
-    solver = 'cc'  # 'scf', 'cc', 'fci'
+    solver = 'fci'  # 'scf', 'cc', 'fci'
 
     htb = -1*_tb(nao)
     eri = np.zeros([nao,nao,nao,nao])
@@ -164,7 +164,7 @@ def test():
 
     mol = gto.M()
     mol.build()
-    mol.nelectron = nao
+    mol.nelectron = 2 #nao
 
     mf = scf.RHF(mol)
     mf.verbose = 0
@@ -226,7 +226,7 @@ def test():
 
     mu = ( mf.mo_energy[mol.nelectron//2-1] + \
            mf.mo_energy[mol.nelectron//2] )/2.
-    mu += 0.05
+    #mu += 0.05
     nocc = mol.nelectron//2
 
     delta_ = 1.e-4
@@ -238,12 +238,10 @@ def test():
         elif solver == 'fci':
             return fci_gf (w, delta, mf.mo_coeff, en_FCIgs, GSvector, \
                            HamCheMPS2, theFCI)
-    def _sigma (w, delta):
-        gf0 = mf_gf (w, delta, evecs, evals, nocc)
-        gf1 = _gf (w, delta)
-        return get_sigma (w, gf0, gf1)
+    def _mf_gf (w, delta):
+        return mf_gf (w, delta, evecs, evals, nocc)
 
-    freqs_ = _get_linear_freqs(-10., 10., 128)[0]
+    freqs_ = _get_linear_freqs(-10., 10., 64)[0]
     gf0 = mf_gf (freqs_, delta, evecs, evals, nocc)
     gf1 = _gf (freqs_, delta)
     dos0 = np.zeros([freqs_.shape[0]])
@@ -255,59 +253,85 @@ def test():
     plt.plot(freqs_, dos0)
     plt.plot(freqs_, dos1)
     plt.show()
-    sigma_inf = _sigma(np.array([1j*1000000.+mu]), delta_)
 
     def _eval_p(w, delta):
-        return _gf(np.array(np.array([w])), delta)
+        gf_ = _gf(np.array([w]), delta)
+        return gf_[:,:,0]
     def _eval_n(w, delta):
-        return np.trace(_eval_p(w, delta)[:,:,0])
+        return np.trace(_eval_p(w, delta))
+
+    mf_infi = _mf_gf(np.array([1j*1000000.+mu]), delta_)
+    gf_infi = _gf(np.array([1j*1000000.+mu]), delta_)
+    sigma_infi = get_sigma(mf_infi, gf_infi)[:,:,0]
+
+    mf_infr = _mf_gf(np.array([1000000.]), delta_)
+    gf_infr = _gf(np.array([1000000.]), delta_)
+    sigma_infr = get_sigma(mf_infr, gf_infr)[:,:,0]
 
     def _eval_en0(w, delta):
-        return np.trace(np.dot(sigma_inf[:,:,0], \
-                               _gf(np.array([w]), delta)[:,:,0]))
+        gf_ = _gf(np.array([w]), delta)
+        return np.trace(np.dot(htb, gf_[:,:,0]))
     def _eval_en1(w, delta):
-        return np.trace(np.dot(htb, _gf(np.array([w]), delta)[:,:,0]))
-    def _eval_enc(w, delta):
-        sigma = _sigma(np.array([w]), delta)
-        sigma -= sigma_inf
-        return np.trace(np.dot(sigma[:,:,0], \
-                               _gf(np.array([w]), delta)[:,:,0]))
-    def _eval_enx(w, delta):
-        sigma = _sigma(np.array([w]), delta)
-        return np.trace(np.dot(sigma[:,:,0], \
-                               _gf(np.array([w]), delta)[:,:,0]))
+        gf_ = _gf(np.array([w]), delta)
+        if np.iscomplex(w):
+            return np.trace(np.dot(sigma_infi, gf_[:,:,0]))
+        else:
+            return np.trace(np.dot(sigma_infr, gf_[:,:,0]))
+    def _eval_en2(w, delta):
+        mf_ = _mf_gf(np.array([w]), delta)
+        gf_ = _gf(np.array([w]), delta)
+        sigma = get_sigma(mf_, gf_)
+        if np.iscomplex(w):
+            return np.trace(np.dot(sigma[:,:,0]-sigma_infi, gf_[:,:,0]))
+        else:
+            return np.trace(np.dot(sigma[:,:,0]-sigma_infr, gf_[:,:,0]))
 
-    def real_fn(w, gf_fn):
-        return -1./np.pi * np.imag(gf_fn(w, delta_))
-    def imag_fn(w, gf_fn):
-        return -2./np.pi * np.real(gf_fn(1j*w+mu, delta_))
+    lplt = True
 
-    fnr = np.zeros_like(freqs_)
-    fni0 = np.zeros_like(freqs_)
-    fni1 = np.zeros_like(freqs_)
-    fni2 = np.zeros_like(freqs_)
-    fni3 = np.zeros_like(freqs_)
-    wmin = np.min(freqs_)
-    wmax = np.max(freqs_)
-    for iw, w in enumerate(freqs_):
-       fnr[iw] = real_fn(w+mu, _eval_n)
-       fni0[iw] = imag_fn(w, _eval_n)
-       fni1[iw] = imag_fn(w, _eval_en0)
-       fni2[iw] = imag_fn(w, _eval_en1)
-       fni3[iw] = imag_fn(w, _eval_enc)
+    if lplt:
+        def real_fn(w, gf_fn):
+            return -1./np.pi * np.imag(gf_fn(w, delta_))
+        def imag_fn(w, gf_fn):
+            return -2./np.pi * np.real(gf_fn(1j*w+mu, delta_))
 
-    plt.plot(freqs_+mu, fnr)
-    plt.figure()
-    plt.plot(freqs_, fni0)
-    plt.figure()
-    plt.plot(freqs_, fni1)
-    plt.figure()
-    plt.plot(freqs_, fni2)
-    plt.figure()
-    plt.plot(freqs_, fni3)
-    plt.show()
+        fnr0 = np.zeros_like(freqs_)
+        fnr1 = np.zeros_like(freqs_)
+        fnr2 = np.zeros_like(freqs_)
+        fnr3 = np.zeros_like(freqs_)
+        fni0 = np.zeros_like(freqs_)
+        fni1 = np.zeros_like(freqs_)
+        fni2 = np.zeros_like(freqs_)
+        fni3 = np.zeros_like(freqs_)
+        wmin = np.min(freqs_)
+        wmax = np.max(freqs_)
+        for iw, w in enumerate(freqs_):
+            fnr0[iw] = real_fn(w+mu, _eval_n)
+            fnr1[iw] = real_fn(w+mu, _eval_en0)
+            fnr2[iw] = real_fn(w+mu, _eval_en1)
+            fnr3[iw] = real_fn(w+mu, _eval_en2)
+            fni0[iw] = imag_fn(w, _eval_n)
+            fni1[iw] = imag_fn(w, _eval_en0)
+            fni2[iw] = imag_fn(w, _eval_en1)
+            fni3[iw] = imag_fn(w, _eval_en2)
 
-    lr = True
+        plt.plot(freqs_+mu, fnr0)
+        plt.figure()
+        plt.plot(freqs_+mu, fnr1)
+        plt.figure()
+        plt.plot(freqs_+mu, fnr2)
+        plt.figure()
+        plt.plot(freqs_+mu, fnr3)
+        plt.figure()
+        plt.plot(freqs_, fni0)
+        plt.figure()
+        plt.plot(freqs_, fni1)
+        plt.figure()
+        plt.plot(freqs_, fni2)
+        plt.figure()
+        plt.plot(freqs_, fni3)
+        plt.show()
+
+    lr = False
 
     # NL = # poles to left of mu, NR = # poles to right of mu
     # nao = NL + NR
@@ -328,32 +352,38 @@ def test():
     if True:
         print 'energy [imag]'
         # trace of h with GF
-        nint_e1 = numint_.int_quad_imag (_eval_en1, mu, \
-                                         epsrel=1.0e-4, delta=delta_)
-        print 'nint H_c    [imag] = ', -nint_e1
-
-        # energy due to a constant self-energy
         nint_e0 = numint_.int_quad_imag (_eval_en0, mu, \
                                          epsrel=1.0e-4, delta=delta_)
-        e0 = (np.real(np.trace(sigma_inf[:,:,0])) - nint_e0)
-        print 'nint S[inf] [imag] = ', e0/2
+        print 'nint H_c    [imag] = ', -nint_e0
 
         # energy due to 1/w self-energy
-        nint_ec = numint_.int_quad_imag (_eval_enc, mu, \
+        nint_e2 = numint_.int_quad_imag (_eval_en2, mu, \
                                          epsrel=1.0e-4, delta=delta_)
-        print 'nint S[w]   [imag] = ', -nint_ec/2.
-        print 'nint_e = ', -nint_e1 + e0/2. -nint_ec/2.
+        print 'nint S[w]   [imag] = ', -nint_e2/2.
+
+        # energy due to a constant self-energy
+        nint_e1 = numint_.int_quad_imag (_eval_en1, mu, \
+                                         epsrel=1.0e-4, delta=delta_)
+        e1 = (np.real(np.trace(sigma_infi)) - nint_e1)
+        print 'nint S[inf] [imag] = ', e1/2
+        print 'nint_e = ', -nint_e0 + e1/2. -nint_e2/2.
         print '----\n'
 
     if lr:
         print 'energy [real]'
+        nint_e0 = numint_.int_quad_real (_eval_en0, mu, x0=-40., \
+                                         epsrel=1.0e-4, delta=delta_)
+        print 'nint H_c    [real] = ', 2*nint_e0
+
+        # energy due to 1/w self-energy
+        nint_e2 = numint_.int_quad_real (_eval_en2, mu, x0=-40., \
+                                         epsrel=1.0e-4, delta=delta_)
+        print 'nint S[w]   [real] = ', nint_e2
+
+        # energy due to a constant self-energy
         nint_e1 = numint_.int_quad_real (_eval_en1, mu, x0=-40., \
                                          epsrel=1.0e-4, delta=delta_)
-        print 'nint H_c    [real] = ', 2*nint_e1
-
-        nint_ex = numint_.int_quad_real (_eval_enx, mu, x0=-40., \
-                                         epsrel=1.0e-4, delta=delta_)
-        print 'nint S[w]   [real] = ', nint_ex
-        print 'nint_e = ', 2*nint_e1 + nint_ex
+        print 'nint S[inf] [real] = ', nint_e1
+        print 'nint_e = ', 2*nint_e0 + nint_e1 + nint_e2
         print '----\n'
 
