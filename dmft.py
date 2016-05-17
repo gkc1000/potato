@@ -243,11 +243,11 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
             gf_imp = _gf_imp (freqs, delta, dmft.mf_)
         elif dmft.solver_type == 'cc':
             gf_imp = _gf_imp (freqs, delta, dmft.mf_, dmft.corr_)
-        gf_imp = gf_imp[:nao,:nao]
+        gf_imp = gf_imp[:nao,:nao,:]
 
         nb = bath_e.shape[0]
         sgdum = np.zeros((nb+nao,nb+nao,nw))
-        gf0_imp = get_gf(himp, sgdum, freqs, delta)[:nao,:nao]
+        gf0_imp = get_gf(himp, sgdum, freqs, delta)[:nao,:nao,:]
 
         sigma = get_sigma(gf0_imp, gf_imp)
 
@@ -333,11 +333,11 @@ class DMFT(object):
 
 def test():
     nao = 1
-    nlat = 64
-    U = 4.
+    nlat = 66
+    U = 1.
     mu = U/2
 
-    htb = _tb(nlat)
+    htb = -1*_tb(nlat)
     eigs = scipy.linalg.eigvalsh(htb)
     htb_k = np.reshape(eigs, [nlat,nao,nao])
     eri = np.zeros([nao,nao,nao,nao])
@@ -346,10 +346,10 @@ def test():
     dmft = DMFT()
     dmft.max_cycle = 32
     dmft.mu = mu
-    dmft.solver_type = 'scf'
+    dmft.solver_type = 'cc'
 
     wl, wh = -6, +6
-    nw = 63
+    nw = 11
     delta = _get_delta(htb)
     conv_tol = 1.e-6
     freqs, wts = _get_linear_freqs(wl, wh, nw)
@@ -368,24 +368,21 @@ def test():
             gf_imp = _gf_imp (w, delta, dmft.mf_)
         elif dmft.solver_type == 'cc':
             gf_imp = _gf_imp (w, delta, dmft.mf_, dmft.corr_)
-        return gf_imp[:nao,:nao]
+        return gf_imp[:nao,:nao,:]
     def _gf0 (w, delta):
         nb = dmft.himp.shape[0]-nao
         nw = len(w)
         sig_dum = np.zeros((nb+nao,nb+nao,nw))
-        return get_gf(dmft.himp, sig_dum, w, delta)[:nao,:nao]
+        return get_gf(dmft.himp, sig_dum, w, delta)[:nao,:nao,:]
 
     def _local_sigma (w, delta):
         gf0_ = _gf0 (w, delta)
         gf1_ = _gf (w, delta)
         return get_sigma(gf0_, gf1_)
 
-    def _local_gf (hcore, sigma, w, delta):
-        return get_gf(hcore, sigma, w, delta)
-
     nkpts  = nlat
     delta_ = delta
-    freqs_ = _get_linear_freqs(-10., 10., 256)[0]
+    freqs_ = _get_linear_freqs(-10., 10., 64)[0]
 
     ldos = True   # whether to plot local dos
     lplt = False  # whether to plot functions to integrate
@@ -397,10 +394,10 @@ def test():
         gf0 = np.zeros([nao, nao, freqs_.shape[0]], np.complex128)
         gf1 = np.zeros([nao, nao, freqs_.shape[0]], np.complex128)
         for k in range(nkpts):
-            gf0 += 1./nkpts * _local_gf(htb_k[k,:,:], sgdum, \
-                                        freqs_, delta_)
-            gf1 += 1./nkpts * _local_gf(htb_k[k,:,:], sigma, \
-                                        freqs_, delta_)
+            gf0 += 1./nkpts * get_gf(htb_k[k,:,:], sgdum, \
+                                     freqs_, delta_)
+            gf1 += 1./nkpts * get_gf(htb_k[k,:,:], sigma, \
+                                     freqs_, delta_)
 
         dos0 = np.zeros([freqs_.shape[0]])
         dos1 = np.zeros([freqs_.shape[0]])
@@ -416,29 +413,29 @@ def test():
         sigma = _local_sigma (np.array([w]), delta)
         p = np.zeros([nao, nao], np.complex128)
         for k in range(nkpts):
-            p += 1./nkpts * _local_gf(htb_k[k,:,:], sigma, \
-                                      np.array([w]), delta)[:,:,0]
+            p += 1./nkpts * get_gf(htb_k[k,:,:], sigma, \
+                                   np.array([w]), delta)[:,:,0]
         return p
     def _eval_n(w, delta):
         return np.trace(_eval_p(w, delta))
 
-    sigma_infi = _local_sigma(np.array([1j*1000000.+mu]), delta)[:,:,0]
-    sigma_infr = _local_sigma(np.array([1000000.]), delta)[:,:,0]
+    sigma_infi = _local_sigma(np.array([1j*1000000.+mu]), delta_)[:,:,0]
+    sigma_infr = _local_sigma(np.array([1000000.]), delta_)[:,:,0]
 
     def _eval_en0(w, delta):
         sigma = _local_sigma (np.array([w]), delta)
         en = np.complex(0.)
         for k in range(nkpts):
-            gf_ = _local_gf(htb_k[k,:,:], sigma, \
-                            np.array([w]), delta)[:,:,0]
+            gf_ = get_gf(htb_k[k,:,:], sigma, \
+                         np.array([w]), delta)[:,:,0]
             en += 1./nkpts * np.trace(np.dot(htb_k[k,:,:], gf_))
         return en
     def _eval_en1(w, delta):
         sigma = _local_sigma (np.array([w]), delta)
         en = np.complex(0.)
         for k in range(nkpts):
-            gf_ = _local_gf(htb_k[k,:,:], sigma, \
-                            np.array([w]), delta)[:,:,0]
+            gf_ = get_gf(htb_k[k,:,:], sigma, \
+                         np.array([w]), delta)[:,:,0]
             if np.iscomplex(w):
                 en += 1./nkpts * np.trace(np.dot(sigma_infi, gf_))
             else:
@@ -448,8 +445,8 @@ def test():
         sigma = _local_sigma (np.array([w]), delta)
         en = np.complex(0.)
         for k in range(nkpts):
-            gf_ = _local_gf(htb_k[k,:,:], sigma, \
-                            np.array([w]), delta)[:,:,0]
+            gf_ = get_gf(htb_k[k,:,:], sigma, \
+                         np.array([w]), delta)[:,:,0]
             if np.iscomplex(w):
                 en += 1./nkpts * np.trace(np.dot(sigma[:,:,0]\
                                                  -sigma_infi, gf_))

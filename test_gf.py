@@ -73,7 +73,7 @@ def mf_gf (freqs, delta, mo_coeff, mo_energy, nocc):
         gf[:,:,iw] = g_ip_+g_ea_
     return gf
 
-def cc_gf (freqs, delta, cc_eom, mo_coeff, mo_energy):
+def cc_gf (freqs, delta, cc_eom, mo_coeff):
     n = mo_coeff.shape[0]
     nw = len(freqs)
     gip = np.zeros((n,n,nw), np.complex128)
@@ -151,7 +151,7 @@ def fci_sol (h0, h1, eri, nel):
     return HamCheMPS2, theFCI, GSvector, EnergyCheMPS2
 
 def test():
-    nao = 10
+    nao = 6
     U = 1.0
 
     solver = 'fci'  # 'scf', 'cc', 'fci'
@@ -234,7 +234,7 @@ def test():
         if solver == 'scf':
             return mf_gf (w, delta, mf.mo_coeff, mf.mo_energy, nocc)
         elif solver == 'cc':
-            return cc_gf (w, delta, cc_eom, mf.mo_coeff, mf.mo_energy)
+            return cc_gf (w, delta, cc_eom, mf.mo_coeff)
         elif solver == 'fci':
             return fci_gf (w, delta, mf.mo_coeff, en_FCIgs, GSvector, \
                            HamCheMPS2, theFCI)
