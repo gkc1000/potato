@@ -1,7 +1,10 @@
+#!/usr/bin/python
+
 import numpy as np
 import numpy.polynomial.legendre
 import scipy
 import scipy.linalg
+import scipy.optimize
 inv = scipy.linalg.inv
 
 import pyscf
@@ -15,30 +18,22 @@ import pyscf.ao2mo as ao2mo
 import greens_function
 import numint_
 
-import matplotlib.pyplot as plt
+fci_ = True
 
-def _get_delta(h):
+if fci_:
+    from sys import path
+    path.append('/home/carlosjh/other/CheMPS2/PyCheMPS2/build/lib.linux-x86_64-2.7/')
+    import PyCheMPS2
+    import ctypes
+
+
+def _get_delta(eigs):
     """
     Rough estimate of broadening from spectrum of h
     """
-    n = h.shape[0]
-    eigs = scipy.linalg.eigvalsh(h)
+    n = eigs.shape[0]
     # the factor of 2. is just an empirical estimate
     return 2. * (max(eigs) - min(eigs)) / (n-1.)
-
-def _tb(n):
-    """
-    Tight-binding Hamiltonian
-    """
-    h=np.zeros([n,n])
-
-    for i in range(n):
-        for j in range(n):
-            if abs(i-j)==1:
-                h[i,j]=1.
-    h[0,-1]=1.
-    h[-1,0]=1.
-    return h
 
 def _get_scaled_legendre_roots(wl, wh, nw):
     """
@@ -61,19 +56,12 @@ def _get_linear_freqs(wl, wh, nw):
     wts = np.ones([nw]) * (wh - wl) / (nw - 1.)
     return freqs, wts
 
-def get_sigma(mf_gf, corr_gf):
+def get_sigma (mf_gf, corr_gf):
     nw = mf_gf.shape[2]
     sigma = np.zeros_like(mf_gf)
     for iw in range(nw):
         sigma[:,:,iw] = inv(mf_gf[:,:,iw]) - inv(corr_gf[:,:,iw])
     return sigma
-
-def get_hyb (gf0_cell, gf_cell):
-    nw = gf0_cell.shape[2]
-    hyb = np.zeros_like(gf0_cell)
-    for iw in range(nw):
-        hyb[:,:,iw] = inv(gf0_cell[:,:,iw]) - inv(gf_cell[:,:,iw])
-    return hyb
 
 def mf_kernel (himp, eri_imp, mu):
     n = himp.shape[0]
@@ -135,6 +123,60 @@ def cc_kernel (mf_):
         cc_eom.l2 *= 1e-5
     return cc_eom
 
+class FCIsol:
+    def __init__ (self, HamCheMPS2, theFCI, GSvector, GSenergy):
+        assert (fci_)
+
+        assert (isinstance(HamCheMPS2, PyCheMPS2.PyHamiltonian))
+        self.HamCheMPS2 = HamCheMPS2
+        assert (isinstance(theFCI, PyCheMPS2.PyFCI))
+        self.FCI = theFCI
+        self.GSvector = GSvector
+        self.GSenergy = GSenergy
+
+def fci_kernel (mf_):
+    norb = mf_.mo_coeff.shape[0]
+    h0   = 0.
+    h1t  = np.dot(mf_.mo_coeff.T, \
+                  np.dot(mf_.get_hcore(), mf_.mo_coeff))
+    erit = ao2mo.incore.full(mf_._eri, mf_.mo_coeff, compact=False)
+    erit = erit.reshape([norb,norb,norb,norb])
+
+    Initializer = PyCheMPS2.PyInitialize()
+    Initializer.Init()
+
+    # Setting up the Hamiltonian
+    Group = 0
+    orbirreps = np.zeros((norb,), dtype=ctypes.c_int)
+    HamCheMPS2 = PyCheMPS2.PyHamiltonian(norb, Group, orbirreps)
+    HamCheMPS2.setEconst( h0 )
+    for cnt1 in range(norb):
+        for cnt2 in range(norb):
+            HamCheMPS2.setTmat(cnt1, cnt2, h1t[cnt1,cnt2])
+            for cnt3 in range(norb):
+                for cnt4 in range(norb):
+                    HamCheMPS2.setVmat(cnt1, cnt2, cnt3, cnt4, \
+                                       erit[cnt1,cnt3,cnt2,cnt4])
+
+    nel = np.count_nonzero(mf_.mo_occ)*2
+    assert( nel % 2 == 0 )
+    Nel_up       = nel / 2
+    Nel_down     = nel / 2
+    Irrep        = 0
+    maxMemWorkMB = 100.0
+    FCIverbose   = 0
+    theFCI = PyCheMPS2.PyFCI( HamCheMPS2, Nel_up, Nel_down, \
+                              Irrep, maxMemWorkMB, FCIverbose )
+    GSvector = np.zeros( [ theFCI.getVecLength() ], \
+                         dtype=ctypes.c_double )
+    GSvector[ theFCI.LowestEnergyDeterminant() ] = 1
+    EnergyCheMPS2 = theFCI.GSDavidson( GSvector )
+    print "FCI corr = %20.12f" % (EnergyCheMPS2-mf_.e_tot)
+    print '====\n'
+
+    fcisol = FCIsol(HamCheMPS2, theFCI, GSvector, EnergyCheMPS2)
+    return fcisol
+
 def mf_gf (freqs, delta, mo_coeff, mo_energy):
     nw = len(freqs)
     n = mo_coeff.shape[0]
@@ -163,6 +205,37 @@ def cc_gf (freqs, delta, cc_eom, mo_coeff):
         g_ip_ = np.dot(mo_coeff, np.dot(g_ip[:,:,iw], mo_coeff.T))
         g_ea_ = np.dot(mo_coeff, np.dot(g_ea[:,:,iw], mo_coeff.T))
         gf[:,:,iw] = g_ip_+g_ea_
+    return gf
+
+def fci_gf (freqs, delta, fcisol, mo_coeff):
+    n  = mo_coeff.shape[0]
+    nw = len(freqs)
+    gf = np.zeros([n, n, nw], np.complex128)
+
+    orbsLeft  = np.arange(n, dtype=ctypes.c_int)
+    orbsRight = np.arange(n, dtype=ctypes.c_int)
+
+    theFCI     = fcisol.FCI
+    energy_gs  = fcisol.GSenergy
+    gs_vector  = fcisol.GSvector
+    HamCheMPS2 = fcisol.HamCheMPS2
+    for iw, w in enumerate(freqs):
+        if np.iscomplex(w):
+            wr = w.real
+            wi = w.imag
+        else:
+            wr = w
+            wi = 0.
+        ReGF, ImGF = theFCI.GFmatrix_rem (wr-energy_gs, 1.0, wi+delta, \
+                orbsLeft, orbsRight, 1, gs_vector, HamCheMPS2)
+        gf_ = (ReGF.reshape((n,n), order='F') + \
+               1j*ImGF.reshape((n,n), order='F')).T
+
+        ReGF, ImGF = theFCI.GFmatrix_add (wr+energy_gs, -1.0, wi+delta, \
+                orbsLeft, orbsRight, 1, gs_vector, HamCheMPS2)
+        gf_ += ReGF.reshape((n,n), order='F') + \
+               1j*ImGF.reshape((n,n), order='F')
+        gf[:,:,iw] = np.dot(mo_coeff, np.dot(gf_, mo_coeff.T))
     return gf
 
 def get_gf(hcore, sigma, freqs, delta):
@@ -200,7 +273,7 @@ def imp_ham (hcore_cell, eri_cell, bath_v, bath_e):
     return himp, eri_imp
 
 def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
-            delta, conv_tol):
+            delta, conv_tol=1.e-6, dmpf=0.5):
     """
     DMFT self-consistency
 
@@ -221,14 +294,19 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
     for k in range(nkpts):
         gf_cell += 1./nkpts * \
                    get_gf(hcore_kpts[k,:,:], sigma, freqs, delta)
-    hyb = get_hyb(gf0_cell, gf_cell)
+    hyb = get_sigma(gf0_cell, gf_cell)
 
     def _gf_imp (freqs, delta, mf_, corr_=None):
+        if dmft.solver_type != 'scf':
+            assert (corr_ is not None)
+
         if dmft.solver_type == 'scf':
             return mf_gf (freqs, delta, mf_.mo_coeff, mf_.mo_energy)
         elif dmft.solver_type == 'cc':
-            assert (corr_ is not None)
             return cc_gf (freqs, delta, corr_, mf_.mo_coeff)
+        elif dmft.solver_type == 'fci':
+            assert (fci_)
+            return fci_gf (freqs, delta, corr_, mf_.mo_coeff)
     
     while not dmft_conv and cycle < max(1, dmft.max_cycle):
         hyb_last = hyb
@@ -238,16 +316,19 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
         dmft.mf_ = mf_kernel (himp, eri_imp, dmft.mu)
         if dmft.solver_type == 'cc':
             dmft.corr_ = cc_kernel (dmft.mf_)
+        elif dmft.solver_type == 'fci':
+            dmft.corr_ = fci_kernel (dmft.mf_)
 
         if dmft.solver_type == 'scf':
             gf_imp = _gf_imp (freqs, delta, dmft.mf_)
-        elif dmft.solver_type == 'cc':
+        elif dmft.solver_type in ('cc', 'fci'):
             gf_imp = _gf_imp (freqs, delta, dmft.mf_, dmft.corr_)
         gf_imp = gf_imp[:nao,:nao,:]
 
         nb = bath_e.shape[0]
         sgdum = np.zeros((nb+nao,nb+nao,nw))
-        gf0_imp = get_gf(himp, sgdum, freqs, delta)[:nao,:nao,:]
+        gf0_imp = get_gf(himp, sgdum, freqs, delta)
+        gf0_imp = gf0_imp[:nao,:nao,:]
 
         sigma = get_sigma(gf0_imp, gf_imp)
 
@@ -256,17 +337,18 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
         for k in range(nkpts):
             gf_cell += 1./nkpts * \
                        get_gf(hcore_kpts[k,:,:], sigma, freqs, delta)
-        hyb = get_hyb(gf0_cell, gf_cell)
+        hyb_new = get_sigma(gf0_cell, gf_cell)
+
+        # damping
+        hyb = dmpf*hyb_new + (1-dmpf)*hyb
 
         norm_hyb = np.linalg.norm(hyb-hyb_last)
-
-        # this would be a good place to put DIIS
-        # or damping
         
         if (norm_hyb < conv_tol):
             dmft_conv = True
         cycle +=1
 
+    dmft.conv_   = dmft_conv
     dmft.hyb     = hyb
     dmft.freqs   = freqs
     dmft.wts     = wts
@@ -321,235 +403,328 @@ def get_bath(hyb, freqs, wts):
 
     return bath_v, bath_e
 
-class DMFT(object):
-    """
-    DMFT calculation object
-    """
-    def __init__(self):
+class DMFT:
+    def __init__(self, hcore_k, eri_cell, \
+                 max_cycle=32, solver_type='scf'):
+        self.nkpts, self.nao = hcore_k.shape[:2]
+        assert (hcore_k.shape == (self.nkpts, self.nao, self.nao,))
+        assert (eri_cell.shape == (self.nao,)*4)
+
+        self.hcore_k  = hcore_k
+        self.eri_cell = eri_cell
+
+        self.max_cycle   = max_cycle
+        self.solver_type = solver_type
+
         # not input options
         self.mf_   = None
         self.corr_ = None
+        self.conv_ = False
 
+    def kernel (self, mu, freqs, wts, delta, \
+                conv_tol=1.e-6, dmpf=0.5):
+        self.mu = mu
+        kernel (self, self.hcore_k, self.eri_cell, \
+                freqs, wts, delta, conv_tol, dmpf)
 
-def test():
-    nao = 1
-    nlat = 66
-    U = 1.
-    mu = U/2
+    def kernel_nopt (self, n0, mu0, freqs, wts, delta, \
+                     conv_tol=1.e-6, dmpf=0.5, tol=1.e-4):
+        def n_eval (mu):
+            self.kernel (mu, freqs, wts, delta, \
+                         conv_tol, dmpf)
+            n_ = self.n_int (delta)
+            print 'mu = ', mu
+            print 'nint_n [imag] = ', n_
+            return n0-n_
 
-    htb = -1*_tb(nlat)
-    eigs = scipy.linalg.eigvalsh(htb)
-    htb_k = np.reshape(eigs, [nlat,nao,nao])
-    eri = np.zeros([nao,nao,nao,nao])
-    eri[0,0,0,0] = U
+        mu = mu0
+        mu = scipy.optimize.newton (n_eval, mu, tol=tol)
+        self.mu = mu
 
-    dmft = DMFT()
-    dmft.max_cycle = 32
-    dmft.mu = mu
-    dmft.solver_type = 'cc'
+    def _gf_imp (self, freqs, delta):
+        assert (self.conv_)
+        if self.solver_type != 'scf':
+            assert (self.corr_ is not None)
+        if self.solver_type == 'scf':
+            gf = mf_gf (freqs, delta, \
+                        self.mf_.mo_coeff, self.mf_.mo_energy)
+        elif self.solver_type == 'cc':
+            gf = cc_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
+        elif self.solver_type == 'fci':
+            assert (fci_)
+            gf = fci_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
+        return gf[:self.nao,:self.nao,:]
+    _gf = _gf_imp
 
-    wl, wh = -6, +6
-    nw = 11
-    delta = _get_delta(htb)
-    conv_tol = 1.e-6
-    freqs, wts = _get_linear_freqs(wl, wh, nw)
+    def _gf0 (self, freqs, delta):
+        nb = self.himp.shape[0]-self.nao
+        nw = len(freqs)
+        sig_dum = np.zeros((nb+self.nao,nb+self.nao,nw))
+        gf = get_gf(self.himp, sig_dum, freqs, delta)
+        return gf[:self.nao,:self.nao,:]
 
-    kernel (dmft, htb_k, eri, freqs, wts, delta, conv_tol)
-
-    def _gf_imp (w, delta, mf_, corr_=None):
-        if dmft.solver_type == 'scf':
-            return mf_gf (w, delta, mf_.mo_coeff, mf_.mo_energy)
-        elif dmft.solver_type == 'cc':
-            assert (corr_ is not None)
-            return cc_gf (w, delta, corr_, mf_.mo_coeff)
-
-    def _gf (w, delta):
-        if dmft.solver_type == 'scf':
-            gf_imp = _gf_imp (w, delta, dmft.mf_)
-        elif dmft.solver_type == 'cc':
-            gf_imp = _gf_imp (w, delta, dmft.mf_, dmft.corr_)
-        return gf_imp[:nao,:nao,:]
-    def _gf0 (w, delta):
-        nb = dmft.himp.shape[0]-nao
-        nw = len(w)
-        sig_dum = np.zeros((nb+nao,nb+nao,nw))
-        return get_gf(dmft.himp, sig_dum, w, delta)[:nao,:nao,:]
-
-    def _local_sigma (w, delta):
-        gf0_ = _gf0 (w, delta)
-        gf1_ = _gf (w, delta)
+    def _local_sigma (self, freqs, delta):
+        gf0_ = self._gf0 (freqs, delta)
+        gf1_ = self._gf_imp (freqs, delta)
         return get_sigma(gf0_, gf1_)
 
-    nkpts  = nlat
-    delta_ = delta
-    freqs_ = _get_linear_freqs(-10., 10., 64)[0]
+    def get_ldos (self, freqs, delta, sigma=None):
+        nw = len(freqs)
+        nao = self.nao
+        nkpts = self.nkpts
 
-    ldos = True   # whether to plot local dos
-    lplt = False  # whether to plot functions to integrate
-    lr   = True   # whether to carry out integrations on the real axis
-
-    if ldos:
-        sigma = _local_sigma (freqs_, delta_)
-        sgdum = np.zeros_like(sigma)
-        gf0 = np.zeros([nao, nao, freqs_.shape[0]], np.complex128)
-        gf1 = np.zeros([nao, nao, freqs_.shape[0]], np.complex128)
+        if sigma is None:
+            sigma = self._local_sigma (freqs, delta)
+        gf = np.zeros([nao, nao, nw], np.complex128)
         for k in range(nkpts):
-            gf0 += 1./nkpts * get_gf(htb_k[k,:,:], sgdum, \
-                                     freqs_, delta_)
-            gf1 += 1./nkpts * get_gf(htb_k[k,:,:], sigma, \
-                                     freqs_, delta_)
-
-        dos0 = np.zeros([freqs_.shape[0]])
-        dos1 = np.zeros([freqs_.shape[0]])
+            gf += 1./nkpts * get_gf(self.hcore_k[k,:,:], sigma, \
+                                    freqs, delta)
+        dos = np.zeros([nao, nw])
         for k in range(nao):
-           dos0[:] += -1./np.pi * np.imag(gf0[k,k,:])
-           dos1[:] += -1./np.pi * np.imag(gf1[k,k,:])
+           dos[k,:] += -1./np.pi * np.imag(gf[k,k,:])
+        return dos
 
-        plt.plot(freqs_, dos0)  # non-interacting DOS
-        plt.plot(freqs_, dos1)
-        plt.show()
+    def get_ldos_ni (self, freqs, delta):
+        nw = len(freqs)
+        nao = self.nao
+        sigma = np.zeros([nao, nao, nw])
+        return self.get_ldos (freqs, delta, sigma)
 
-    def _eval_p(w, delta):
-        sigma = _local_sigma (np.array([w]), delta)
-        p = np.zeros([nao, nao], np.complex128)
+    def rdm_freq (self, freqs, delta):
+        nao = self.nao
+        nkpts = self.nkpts
+
+        if isinstance(freqs, (float, np.float, complex, np.complex)):
+            _freqs = np.array([freqs])
+        else:
+            _freqs = freqs
+
+        nw = len(_freqs)
+        sigma = self._local_sigma (_freqs, delta)
+        p = np.zeros([nao, nao, nw], np.complex128)
         for k in range(nkpts):
-            p += 1./nkpts * get_gf(htb_k[k,:,:], sigma, \
-                                   np.array([w]), delta)[:,:,0]
+            p += 1./nkpts * get_gf(self.hcore_k[k,:,:], sigma, \
+                                   _freqs, delta)
         return p
-    def _eval_n(w, delta):
-        return np.trace(_eval_p(w, delta))
 
-    sigma_infi = _local_sigma(np.array([1j*1000000.+mu]), delta_)[:,:,0]
-    sigma_infr = _local_sigma(np.array([1000000.]), delta_)[:,:,0]
+    def rdm_int (self, delta, axis='imag', \
+                 x0=None, epsrel=1.0e-4):
+        assert (axis in ('real', 'imag'))
+        if axis == 'real':
+            assert (x0 is not None)
 
-    def _eval_en0(w, delta):
-        sigma = _local_sigma (np.array([w]), delta)
-        en = np.complex(0.)
-        for k in range(nkpts):
-            gf_ = get_gf(htb_k[k,:,:], sigma, \
-                         np.array([w]), delta)[:,:,0]
-            en += 1./nkpts * np.trace(np.dot(htb_k[k,:,:], gf_))
-        return en
-    def _eval_en1(w, delta):
-        sigma = _local_sigma (np.array([w]), delta)
-        en = np.complex(0.)
-        for k in range(nkpts):
-            gf_ = get_gf(htb_k[k,:,:], sigma, \
-                         np.array([w]), delta)[:,:,0]
-            if np.iscomplex(w):
-                en += 1./nkpts * np.trace(np.dot(sigma_infi, gf_))
-            else:
-                en += 1./nkpts * np.trace(np.dot(sigma_infr, gf_))
-        return en
-    def _eval_en2(w, delta):
-        sigma = _local_sigma (np.array([w]), delta)
-        en = np.complex(0.)
-        for k in range(nkpts):
-            gf_ = get_gf(htb_k[k,:,:], sigma, \
-                         np.array([w]), delta)[:,:,0]
-            if np.iscomplex(w):
-                en += 1./nkpts * np.trace(np.dot(sigma[:,:,0]\
-                                                 -sigma_infi, gf_))
-            else:
-                en += 1./nkpts * np.trace(np.dot(sigma[:,:,0]\
-                                                 -sigma_infr, gf_))
-        return en
+        p_int = np.zeros([self.nao, self.nao])
+        for k in range(self.nao):
+            for l in range(self.nao):
+                def _p_freq (w, delta):
+                    return self.rdm_freq (w, delta)[k,l,0]
 
-    if lplt:
-        def real_fn(w, gf_fn):
-            return -1./np.pi * np.imag(gf_fn(w, delta_))
-        def imag_fn(w, gf_fn):
-            return -2./np.pi * np.real(gf_fn(1j*w+mu, delta_))
+                if axis == 'imag':
+                    p_int[k,l] = numint_.int_quad_imag (_p_freq, \
+                                self.mu, epsrel=epsrel, delta=delta)
+                else:
+                    assert (x0 is not None)
+                    p_int[k,l] = numint_.int_quad_real (_p_freq, \
+                                self.mu, x0=x0, \
+                                epsrel=epsrel, delta=delta)
+        if axis == 'imag':
+            return 2*0.5*(np.eye(self.nao)-p_int)
+        else:
+            return 2*p_int
 
-        fnr0 = np.zeros_like(freqs_)
-        fnr1 = np.zeros_like(freqs_)
-        fnr2 = np.zeros_like(freqs_)
-        fnr3 = np.zeros_like(freqs_)
-        fni0 = np.zeros_like(freqs_)
-        fni1 = np.zeros_like(freqs_)
-        fni2 = np.zeros_like(freqs_)
-        fni3 = np.zeros_like(freqs_)
-        wmin = np.min(freqs_)
-        wmax = np.max(freqs_)
-        for iw, w in enumerate(freqs_):
-            fnr0[iw] = real_fn(w+mu, _eval_n)
-            fnr1[iw] = real_fn(w+mu, _eval_en0)
-            fnr2[iw] = real_fn(w+mu, _eval_en1)
-            fnr3[iw] = real_fn(w+mu, _eval_en2)
-            fni0[iw] = imag_fn(w, _eval_n)
-            fni1[iw] = imag_fn(w, _eval_en0)
-            fni2[iw] = imag_fn(w, _eval_en1)
-            fni3[iw] = imag_fn(w, _eval_en2)
+    def n_freq (self, freqs, delta):
+        if isinstance(freqs, (float, np.float, complex, np.complex)):
+            _freqs = np.array([freqs])
+        else:
+            _freqs = freqs
 
-        plt.plot(freqs_+mu, fnr0)
-        plt.figure()
-        plt.plot(freqs_+mu, fnr1)
-        plt.figure()
-        plt.plot(freqs_+mu, fnr2)
-        plt.figure()
-        plt.plot(freqs_+mu, fnr3)
-        plt.figure()
-        plt.plot(freqs_, fni0)
-        plt.figure()
-        plt.plot(freqs_, fni1)
-        plt.figure()
-        plt.plot(freqs_, fni2)
-        plt.figure()
-        plt.plot(freqs_, fni3)
+        nw = len(_freqs)
+        n = np.zeros([nw], np.complex128)
+        for iw, w in enumerate(_freqs):
+            n[iw] = np.trace(self.rdm_freq(np.array([w]), \
+                                           delta)[:,:,0])
+        return n
+
+    def n_int (self, delta, axis='imag', \
+               x0=None, epsrel=1.0e-4):
+        assert (axis in ('real', 'imag'))
+        if axis == 'real':
+            assert (x0 is not None)
+
+        def _n_freq (w, delta):
+            return self.n_freq (w, delta)[0]
+
+        if axis == 'imag':
+            # NL = # poles left of mu, NR = # poles right of mu
+            # nao = NL + NR
+            # integration gives NR - NL (factor of 2 in imag_fn)
+            nint_n = numint_.int_quad_imag (_n_freq, self.mu, \
+                                epsrel=epsrel, delta=delta)
+            return 2*0.5*(self.nao-nint_n)
+        else:
+            nint_n = numint_.int_quad_real (_n_freq, self.mu, \
+                                x0=x0, epsrel=epsrel, delta=delta)
+            return 2*nint_n
+
+    def energy (self, delta, axis='imag', \
+                x0=None, epsrel=1.0e-4):
+        assert (axis in ('real', 'imag'))
+        if axis == 'real':
+            assert (x0 is not None)
+
+        nkpts = self.nkpts
+        inf_  = np.array([100000.])
+        if axis == 'imag':
+            sinf = self._local_sigma(1j*inf_+self.mu, delta)[:,:,0]
+        else:
+            sinf = self._local_sigma(inf_, delta)[:,:,0]
+
+        def _eval_en0 (w, delta):
+            sigma = self._local_sigma (np.array([w]), delta)
+            en = np.complex(0.)
+            for k in range(nkpts):
+                gf_ = get_gf(self.hcore_k[k,:,:], sigma, \
+                             np.array([w]), delta)[:,:,0]
+                en += 1./nkpts * \
+                      np.trace(np.dot(self.hcore_k[k,:,:], gf_))
+            return en
+        def _eval_en1(w, delta):
+            sigma = self._local_sigma (np.array([w]), delta)
+            en = np.complex(0.)
+            for k in range(nkpts):
+                gf_ = get_gf(self.hcore_k[k,:,:], sigma, \
+                             np.array([w]), delta)[:,:,0]
+                en += 1./nkpts * \
+                      np.trace(np.dot(sinf, gf_))
+            return en
+        def _eval_en2(w, delta):
+            sigma = self._local_sigma (np.array([w]), delta)
+            en = np.complex(0.)
+            for k in range(nkpts):
+                gf_ = get_gf(self.hcore_k[k,:,:], sigma, \
+                             np.array([w]), delta)[:,:,0]
+                en += 1./nkpts * \
+                      np.trace(np.dot(sigma[:,:,0]-sinf, gf_))
+            return en
+
+        if axis == 'imag':
+            # trace of h with GF
+            nint_e0 = numint_.int_quad_imag (_eval_en0, self.mu, \
+                                    epsrel=epsrel, delta=delta)
+            print 'nint H_c    [imag] = ', -nint_e0
+
+            # energy due to 1/w self-energy
+            nint_e2 = numint_.int_quad_imag (_eval_en2, self.mu, \
+                                    epsrel=epsrel, delta=delta)
+            print 'nint S[w]   [imag] = ', -nint_e2/2.
+
+            # energy due to a constant self-energy
+            nint_e1 = numint_.int_quad_imag (_eval_en1, self.mu, \
+                                    epsrel=epsrel, delta=delta)
+            e1 = (np.real(np.trace(sinf)) - nint_e1)
+            print 'nint S[inf] [imag] = ', e1/2
+            return -nint_e0 + e1/2. -nint_e2/2.
+
+        else:
+            # trace of h with GF
+            nint_e0 = numint_.int_quad_real (_eval_en0, self.mu, \
+                                    x0=x0, epsrel=epsrel, delta=delta)
+            print 'nint H_c    [real] = ', 2*nint_e0
+
+            # energy due to 1/w self-energy
+            nint_e2 = numint_.int_quad_real (_eval_en2, self.mu, \
+                                    x0=x0, epsrel=epsrel, delta=delta)
+            print 'nint S[w]   [real] = ', nint_e2
+
+            # energy due to a constant self-energy
+            nint_e1 = numint_.int_quad_real (_eval_en1, self.mu, \
+                                    x0=x0, epsrel=epsrel, delta=delta)
+            print 'nint S[inf] [real] = ', nint_e1
+            return 2*nint_e0 + nint_e1 + nint_e2
+
+
+def hub_1d (nx, U, nw, max_cycle=256, solver_type='scf'):
+    kx = np.arange(-nx/2+1, nx/2+1, dtype=float)
+    hcore_k_ = -2*np.cos(2.*np.pi*kx/nx)
+    hcore_k  = hcore_k_.reshape([nx,1,1])
+    eri = np.zeros([1,1,1,1])
+    eri[0,0,0,0] = U
+    mu0 = U/2.
+
+    dmft = DMFT (hcore_k, eri, \
+                 max_cycle=max_cycle, solver_type=solver_type)
+
+    wl, wh = -6., +6.
+    delta = _get_delta(hcore_k_)
+    freqs, wts = _get_linear_freqs(wl, wh, nw)
+    dmft.kernel_nopt (1., mu0, freqs, wts, delta, dmpf=0.75)
+    return dmft, freqs, delta
+
+def hub_2d (nx, ny, U, nw, max_cycle=256, solver_type='scf'):
+    kx = np.arange(-nx/2+1, nx/2+1, dtype=float)
+    ky = np.arange(-ny/2+1, ny/2+1, dtype=float)
+    kx_, ky_ = np.meshgrid(kx,ky)
+    hcore_k_ = -2*np.cos(2.*np.pi*kx_.flatten(order='C')/nx) \
+               -2*np.cos(2.*np.pi*ky_.flatten(order='C')/ny)
+    hcore_k  = hcore_k_.reshape([nx*ny,1,1])
+    eri = np.zeros([1,1,1,1])
+    eri[0,0,0,0] = U
+    mu0 = U/2.
+
+    dmft = DMFT (hcore_k, eri, \
+                 max_cycle=max_cycle, solver_type=solver_type)
+
+    wl, wh = -8., +8.
+    delta = _get_delta(hcore_k_)
+    freqs, wts = _get_linear_freqs(wl, wh, nw)
+    dmft.kernel_nopt (1., mu0, freqs, wts, delta, dmpf=0.75)
+    return dmft, freqs, delta
+
+
+if __name__ == '__main__':
+    dmft, w, delta = hub_1d (30, 1., 15, solver_type='scf')
+    # dmft, w, delta = hub_2d (6, 6, 2., 25, solver_type='scf')
+
+    freqs = _get_linear_freqs(-10., 10., 128)[0]
+    try:
+        import matplotlib.pyplot as plt
+        dos0 = dmft.get_ldos_ni (freqs, delta)
+        dos1 = dmft.get_ldos (freqs, delta)
+        plt.plot(freqs, dos0[0,:])
+        plt.plot(freqs, dos1[0,:])
         plt.show()
+    except:
+        pass
 
-    # NL = # poles to left of mu, NR = # poles to right of mu
-    # nao = NL + NR
-    # integration gives NR - NL (factor of 2 in imag_fn)
+    lr = False
+
     print '\nnumber of electrons'
-    if True:
-        nint_n = numint_.int_quad_imag (_eval_n, mu, \
-                                        epsrel=1.0e-4, delta=delta_)
-        nint_n = 2*0.5*(nao-nint_n)
-        print 'nint_n [imag] = ', nint_n
-        # additional factor of 2 by spin integration
+    n_ = dmft.n_int (delta)
+    print 'nint_n [imag] = ', n_
     if lr:
-        nint_n = numint_.int_quad_real (_eval_n, mu, x0=-40., \
-                                        epsrel=1.0e-4, delta=delta_)
-        print 'nint_n [real] = ', 2*nint_n
+        nr_ = dmft.n_int (delta, \
+                          axis='real', x0=-20.)
+        print 'nint_n [real] = ', nr_
     print '----\n'
 
-    if True:
-        print 'energy [imag]'
-        # trace of h with GF
-        nint_e0 = numint_.int_quad_imag (_eval_en0, mu, \
-                                         epsrel=1.0e-4, delta=delta_)
-        print 'nint H_c    [imag] = ', -nint_e0
+    # print 'density matrix'
+    # p_ = dmft.rdm_int (delta)
+    # print 'nint_p [imag] = '
+    # print p_
+    # if lr:
+    #     pr_ = dmft.rdm_int (delta, \
+    #                         axis='real', x0=-20.)
+    #     print 'nint_p [real] = '
+    #     print pr_
+    # print '----\n'
 
-        # energy due to 1/w self-energy
-        nint_e2 = numint_.int_quad_imag (_eval_en2, mu, \
-                                         epsrel=1.0e-4, delta=delta_)
-        print 'nint S[w]   [imag] = ', -nint_e2/2.
-
-        # energy due to a constant self-energy
-        nint_e1 = numint_.int_quad_imag (_eval_en1, mu, \
-                                         epsrel=1.0e-4, delta=delta_)
-        e1 = (np.real(np.trace(sigma_infi)) - nint_e1)
-        print 'nint S[inf] [imag] = ', e1/2
-        print 'nint_e = ', -nint_e0 + e1/2. -nint_e2/2.
-        print '----\n'
-
+    print 'energy'
+    e_ = dmft.energy (delta)
+    print 'nint_e [imag] = ', e_
     if lr:
-        print 'energy [real]'
-        nint_e0 = numint_.int_quad_real (_eval_en0, mu, x0=-40., \
-                                         epsrel=1.0e-4, delta=delta_)
-        print 'nint H_c    [real] = ', 2*nint_e0
-
-        # energy due to 1/w self-energy
-        nint_e2 = numint_.int_quad_real (_eval_en2, mu, x0=-40., \
-                                         epsrel=1.0e-4, delta=delta_)
-        print 'nint S[w]   [real] = ', nint_e2
-
-        # energy due to a constant self-energy
-        nint_e1 = numint_.int_quad_real (_eval_en1, mu, x0=-40., \
-                                         epsrel=1.0e-4, delta=delta_)
-        print 'nint S[inf] [real] = ', nint_e1
-        print 'nint_e = ', 2*nint_e0 + nint_e1 + nint_e2
-        print '----\n'
+        er_ = dmft.energy (delta, \
+                           axis='real', x0=-20.)
+        print 'nint_e [real] = ', er_
+    print '----\n'
 
 
