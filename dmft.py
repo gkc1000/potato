@@ -285,6 +285,9 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
 
     nkpts, nao, nao = hcore_kpts.shape
     hcore_cell = 1./nkpts * np.sum(hcore_kpts, axis=0)
+    if np.iscomplexobj(hcore_cell):
+        assert (np.allclose(np.zeros((nao,nao,)), hcore_cell.imag))
+        hcore_cell = hcore_cell.real
 
     # get initial guess
     nw = len(freqs)
@@ -360,7 +363,7 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
     dmft.wts     = wts
     dmft.himp    = himp
     dmft.eri_imp = eri_imp
-    
+
 def get_bath(hyb, freqs, wts):
     """
     Convert hybridization function 
@@ -591,8 +594,6 @@ class DMFT:
             sinf = self._local_sigma(1j*inf_+self.mu, delta)[:,:,0]
         else:
             sinf = self._local_sigma(inf_, delta)[:,:,0]
-        print 'S[inf] ='
-        print sinf
 
         def _eval_en0 (w, delta):
             sigma = self._local_sigma (np.array([w]), delta)
@@ -658,24 +659,29 @@ class DMFT:
             return 2*nint_e0 + nint_e1 + nint_e2
 
 
-def hub_1d (nx, U, nw, max_cycle=256, solver_type='scf'):
+def hub_1d (nx, U, nw, fill=1., \
+            max_cycle=256, solver_type='scf'):
     kx = np.arange(-nx/2+1, nx/2+1, dtype=float)
     hcore_k_ = -2*np.cos(2.*np.pi*kx/nx)
     hcore_k  = hcore_k_.reshape([nx,1,1])
     eri = np.zeros([1,1,1,1])
     eri[0,0,0,0] = U
     mu0 = U/2.
+    # print np.sort(hcore_k_)
+    # assert(False)
 
     dmft = DMFT (hcore_k, eri, \
                  max_cycle=max_cycle, solver_type=solver_type)
 
-    wl, wh = -6., +6.
+    wl, wh = -5.+U/2., 5.+U/2.
     delta = _get_delta(hcore_k_)
-    freqs, wts = _get_linear_freqs(wl, wh, nw)
-    dmft.kernel_nopt (1., mu0, freqs, wts, delta, dmpf=0.75)
+    #freqs, wts = _get_linear_freqs(wl, wh, nw)
+    freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
+    dmft.kernel_nopt (fill, mu0, freqs, wts, delta, dmpf=0.75)
     return dmft, freqs, delta
 
-def hub_2d (nx, ny, U, nw, max_cycle=256, solver_type='scf'):
+def hub_2d (nx, ny, U, nw, fill=1., \
+            max_cycle=256, solver_type='scf'):
     kx = np.arange(-nx/2+1, nx/2+1, dtype=float)
     ky = np.arange(-ny/2+1, ny/2+1, dtype=float)
     kx_, ky_ = np.meshgrid(kx,ky)
@@ -685,27 +691,176 @@ def hub_2d (nx, ny, U, nw, max_cycle=256, solver_type='scf'):
     eri = np.zeros([1,1,1,1])
     eri[0,0,0,0] = U
     mu0 = U/2.
+    # print np.sort(hcore_k_)
+    # assert(False)
 
     dmft = DMFT (hcore_k, eri, \
                  max_cycle=max_cycle, solver_type=solver_type)
 
-    wl, wh = -8., +8.
+    wl, wh = -7.+U/2., +7.+U/2.
     delta = _get_delta(hcore_k_)
-    freqs, wts = _get_linear_freqs(wl, wh, nw)
-    dmft.kernel_nopt (1., mu0, freqs, wts, delta, dmpf=0.75)
+    # freqs, wts = _get_linear_freqs(wl, wh, nw)
+    freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
+    dmft.kernel_nopt (fill, mu0, freqs, wts, delta, dmpf=0.75)
+    return dmft, freqs, delta
+
+def hub_cell_1d (nx, isx, U, nw, fill=1., \
+                 max_cycle=256, solver_type='scf'):
+    assert (nx % isx == 0)
+
+    def nn_hopping (ns):
+        t = np.zeros((ns,ns,), dtype=float)
+        for ist in range(ns-1):
+            t[ist,ist+1] = -1.0
+            t[ist+1,ist] = -1.0
+        t[0,-1] += -1.0
+        t[-1,0] += -1.0
+        return t
+
+    def planewave (ns):
+        U = np.zeros((ns,ns,), dtype=complex)
+        scr = np.arange(ns, dtype=float)
+        for k in range(ns):
+            kk = (2.0*np.pi/ns)*k
+            U[:,k] = np.exp(1j*kk*scr)
+        U *= (1.0/np.sqrt(ns))
+        return U
+
+    nx_ = nx/isx
+    T   = nn_hopping (nx)
+    Ut  = planewave (nx_)
+    hcore_k = np.zeros((nx_,isx,isx,), dtype=complex)
+    for i1 in range(isx):
+        for i2 in range(isx):
+            for k in range(nx_):
+                T_ = T[i1::isx,i2::isx].\
+                     reshape((nx_,nx_,), order='F')
+                hcore_k[k,i1,i2] = \
+                        np.dot(Ut[:,k].T, np.dot(T_, Ut[:,k].conj()))
+
+    hcore_k_ = np.zeros((nx_,isx))
+    for k in range(nx_):
+        hcore_k_[k,:] = scipy.linalg.eigh(hcore_k[k,:,:], \
+                                          eigvals_only=True)
+    # print np.sort(hcore_k_.flatten())
+    # assert (False)
+
+    eri = np.zeros([isx,isx,isx,isx])
+    for k in range(isx):
+        eri[k,k,k,k] = U
+    mu0 = U/2.
+
+    dmft = DMFT (hcore_k, eri, \
+                 max_cycle=max_cycle, solver_type=solver_type)
+
+    wl, wh = -5.+U/2., 5.+U/2.
+    delta = _get_delta(hcore_k_.flatten())
+    #freqs, wts = _get_linear_freqs(wl, wh, nw)
+    freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
+    dmft.kernel_nopt (fill*isx, mu0, freqs, wts, delta, dmpf=0.75)
+    return dmft, freqs, delta
+
+def hub_cell_2d (nx, ny, isx, isy, U, nw, fill=1., \
+                 max_cycle=256, solver_type='scf'):
+    assert (nx % isx == 0)
+    assert (ny % isy == 0)
+
+    def nn_hopping (nx, ny):
+        ns = nx*ny
+        t = np.zeros((ny,nx,ny,nx,), dtype=float)
+        for istx in range(nx):
+            for isty in range(ny-1):
+                t[isty,istx,isty+1,istx] = -1.0
+                t[isty+1,istx,isty,istx] = -1.0
+            t[0,istx,-1,istx] += -1.0
+            t[-1,istx,0,istx] += -1.0
+        for isty in range(ny):
+            for istx in range(nx-1):
+                t[isty,istx,isty,istx+1] = -1.0
+                t[isty,istx+1,isty,istx] = -1.0
+            t[isty,0,isty,-1] += -1.0
+            t[isty,-1,isty,0] += -1.0
+        return t
+
+    def planewave (nx, ny):
+        ns = nx*ny
+        U = np.zeros((ns,ns,), dtype=complex)
+        sx = np.arange(nx, dtype=float)
+        sy = np.arange(ny, dtype=float)
+        scry, scrx = np.meshgrid(sx,sy)
+        scrx = scrx.reshape((ns,), order='F')
+        scry = scry.reshape((ns,), order='F')
+        k = 0
+        for kx in range(nx):
+            kkx = (2.0*np.pi/nx)*kx
+            for ky in range(ny):
+                kky = (2.0*np.pi/ny)*ky
+                U[:,k] = np.exp(1j*(kkx*scrx+kky*scry))
+                k += 1
+        U *= (1.0/np.sqrt(ns))
+        return U
+
+    nx_ = nx/isx
+    ny_ = ny/isy
+    ns_ = nx_*ny_
+    T   = nn_hopping (nx, ny)
+    Ut  = planewave (nx_, ny_)
+
+    hcore_k = np.zeros((ns_,isy,isx,isy,isx,), dtype=complex)
+    for i1y in range(isy):
+        for i1x in range(isx):
+            for i2y in range(isy):
+                for i2x in range(isx):
+                    T_ = T[i1y::isy,i1x::isx,i2y::isy,i2x::isx].\
+                         reshape((ns_,ns_,), order='F')
+                    for k in range(ns_):
+                        hcore_k[k,i1y,i1x,i2y,i2x] = \
+                            np.dot(Ut[:,k].T, np.dot(T_, Ut[:,k].conj()))
+    hcore_k = hcore_k.reshape((ns_,isy*isx,isy*isx,), order='F')
+
+    hcore_k_ = np.zeros((ns_,isx*isy))
+    for k in range(ns_):
+        hcore_k_[k,:] = scipy.linalg.eigh(hcore_k[k,:,:], \
+                                          eigvals_only=True)
+    # print np.sort(hcore_k_.flatten())
+    # assert (False)
+
+    eri = np.zeros([isx*isy,isx*isy,isx*isy,isx*isy])
+    for k in range(isx*isy):
+        eri[k,k,k,k] = U
+    mu0 = U/2.
+
+    dmft = DMFT (hcore_k, eri, \
+                 max_cycle=max_cycle, solver_type=solver_type)
+
+    wl, wh = -7.+U/2., 7.+U/2.
+    delta = _get_delta(hcore_k_.flatten())
+    #freqs, wts = _get_linear_freqs(wl, wh, nw)
+    freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
+    dmft.kernel_nopt (fill*isx*isy, mu0, freqs, wts, delta, dmpf=0.75)
     return dmft, freqs, delta
 
 
 if __name__ == '__main__':
-    dmft, w, delta = hub_1d (90, 4., 5, solver_type='scf')
-    # dmft, w, delta = hub_2d (6, 6, 2., 35, solver_type='scf')
+    U = 4.
+    # dmft, w, delta = hub_1d (30, U, 15, solver_type='scf')
+    # dmft, w, delta = hub_2d (10, 10, U, 9, solver_type='scf')
 
-    freqs = _get_linear_freqs(-10., 10., 128)[0]
+    # dmft, w, delta = hub_cell_1d (30, 2, U, 9, \
+    #                               solver_type='scf')
+    # dmft, w, delta = hub_cell_2d (10, 10, 2, 2, U, 7, \
+    #                               solver_type='scf')
+
     try:
         import matplotlib.pyplot as plt
+        freqs = _get_linear_freqs(-5., 5., 128)[0]
+        plt.figure(1)
         dos0 = dmft.get_ldos_ni (freqs, delta)
-        dos1 = dmft.get_ldos (freqs, delta)
         plt.plot(freqs, dos0[0,:])
+
+        freqs = _get_linear_freqs(-5.+U/2., 5.+U/2., 128)[0]
+        plt.figure(2)
+        dos1 = dmft.get_ldos (freqs, delta)
         plt.plot(freqs, dos1[0,:])
         plt.show()
     except:
