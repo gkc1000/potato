@@ -1,5 +1,7 @@
 #!/usr/bin/python
 
+from sys import stdout
+
 import numpy as np
 import numpy.polynomial.legendre
 import scipy
@@ -359,7 +361,10 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
             dmft.chkpt()
 
         norm_hyb = np.linalg.norm(hyb-hyb_last)
+        print 'cycle    = ', cycle+1
         print 'norm_hyb = ', norm_hyb
+        print '****'
+        stdout.flush()
         
         if (norm_hyb < conv_tol):
             dmft_conv = True
@@ -429,6 +434,7 @@ class DMFT:
         self.chkfile     = None
 
         # do not touch
+        self.mu    = None
         self.mf_   = None
         self.corr_ = None
 
@@ -445,6 +451,7 @@ class DMFT:
                 fh5['dmft/sigma'] = self.sigma
 
                 fh5['dmft/solver_type'] = self.solver_type
+                fh5['dmft/mu']          = self.mu
                 fh5['dmft/delta']       = self.delta
                 fh5['dmft/freqs']       = self.freqs
                 fh5['dmft/wts']         = self.wts
@@ -673,7 +680,7 @@ class DMFT:
             return 2*nint_e0 + nint_e1 + nint_e2
 
 
-def hub_1d (nx, U, nw, fill=1., \
+def hub_1d (nx, U, nw, fill=1., chkf=None, \
             max_cycle=256, solver_type='scf'):
     kx = np.arange(-nx/2+1, nx/2+1, dtype=float)
     hcore_k_ = -2*np.cos(2.*np.pi*kx/nx)
@@ -686,6 +693,7 @@ def hub_1d (nx, U, nw, fill=1., \
 
     dmft = DMFT (hcore_k, eri, \
                  max_cycle=max_cycle, solver_type=solver_type)
+    dmft.chkfile = chkf
 
     wl, wh = -5.+U/2., 5.+U/2.
     delta = _get_delta(hcore_k_)
@@ -694,7 +702,7 @@ def hub_1d (nx, U, nw, fill=1., \
     dmft.kernel_nopt (fill, mu0, freqs, wts, delta, dmpf=0.75)
     return dmft, freqs, delta
 
-def hub_2d (nx, ny, U, nw, fill=1., \
+def hub_2d (nx, ny, U, nw, fill=1., chkf=None, \
             max_cycle=256, solver_type='scf'):
     kx = np.arange(-nx/2+1, nx/2+1, dtype=float)
     ky = np.arange(-ny/2+1, ny/2+1, dtype=float)
@@ -710,15 +718,16 @@ def hub_2d (nx, ny, U, nw, fill=1., \
 
     dmft = DMFT (hcore_k, eri, \
                  max_cycle=max_cycle, solver_type=solver_type)
+    dmft.chkfile = chkf
 
     wl, wh = -7.+U/2., +7.+U/2.
     delta = _get_delta(hcore_k_)
-    # freqs, wts = _get_linear_freqs(wl, wh, nw)
+    #freqs, wts = _get_linear_freqs(wl, wh, nw)
     freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
     dmft.kernel_nopt (fill, mu0, freqs, wts, delta, dmpf=0.75)
     return dmft, freqs, delta
 
-def hub_cell_1d (nx, isx, U, nw, fill=1., \
+def hub_cell_1d (nx, isx, U, nw, fill=1., chkf=None, \
                  max_cycle=256, solver_type='scf'):
     assert (nx % isx == 0)
 
@@ -766,6 +775,7 @@ def hub_cell_1d (nx, isx, U, nw, fill=1., \
 
     dmft = DMFT (hcore_k, eri, \
                  max_cycle=max_cycle, solver_type=solver_type)
+    dmft.chkfile = chkf
 
     wl, wh = -5.+U/2., 5.+U/2.
     delta = _get_delta(hcore_k_.flatten())
@@ -774,7 +784,7 @@ def hub_cell_1d (nx, isx, U, nw, fill=1., \
     dmft.kernel_nopt (fill*isx, mu0, freqs, wts, delta, dmpf=0.75)
     return dmft, freqs, delta
 
-def hub_cell_2d (nx, ny, isx, isy, U, nw, fill=1., \
+def hub_cell_2d (nx, ny, isx, isy, U, nw, fill=1., chkf=None, \
                  max_cycle=256, solver_type='scf'):
     assert (nx % isx == 0)
     assert (ny % isy == 0)
@@ -846,6 +856,7 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, fill=1., \
 
     dmft = DMFT (hcore_k, eri, \
                  max_cycle=max_cycle, solver_type=solver_type)
+    dmft.chkfile = chkf
 
     wl, wh = -7.+U/2., 7.+U/2.
     delta = _get_delta(hcore_k_.flatten())
@@ -857,7 +868,7 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, fill=1., \
 
 if __name__ == '__main__':
     U = 4.
-    dmft, w, delta = hub_1d (30, U, 15, solver_type='scf')
+    # dmft, w, delta = hub_1d (30, U, 15, solver_type='scf')
     # dmft, w, delta = hub_2d (10, 10, U, 9, solver_type='scf')
 
     # dmft, w, delta = hub_cell_1d (30, 2, U, 9, \
