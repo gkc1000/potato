@@ -18,14 +18,15 @@ import pyscf.ao2mo as ao2mo
 import greens_function
 import numint_
 
-fci_ = True
-
-if fci_:
+fci_ = False
+try:
     from sys import path
     path.append('/home/carlosjh/other/CheMPS2/PyCheMPS2/build/lib.linux-x86_64-2.7/')
     import PyCheMPS2
     import ctypes
-
+    fci_ = True
+except:
+    pass
 
 def _get_delta(eigs):
     """
@@ -288,7 +289,11 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
     # get initial guess
     nw = len(freqs)
 
-    sigma = np.zeros([nao, nao, nw])
+    if dmft.sigma is None:
+        sigma = np.zeros([nao, nao, nw])
+    else:
+        assert (dmft.sigma.shape == (nao,nao,nw))
+        sigma = dmft.sigma.copy()
     gf0_cell = get_gf(hcore_cell, sigma, freqs, delta)
     gf_cell = np.zeros([nao, nao, nw], np.complex128)
     for k in range(nkpts):
@@ -349,6 +354,7 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
         cycle +=1
 
     dmft.conv_   = dmft_conv
+    dmft.sigma   = sigma
     dmft.hyb     = hyb
     dmft.freqs   = freqs
     dmft.wts     = wts
@@ -416,10 +422,17 @@ class DMFT:
         self.max_cycle   = max_cycle
         self.solver_type = solver_type
 
-        # not input options
+        # do not touch
         self.mf_   = None
         self.corr_ = None
-        self.conv_ = False
+
+        self.conv_   = False
+        self.sigma   = None
+        self.hyb     = None
+        self.freqs   = None
+        self.wts     = None
+        self.himp    = None
+        self.eri_imp = None
 
     def kernel (self, mu, freqs, wts, delta, \
                 conv_tol=1.e-6, dmpf=0.5):
@@ -432,7 +445,7 @@ class DMFT:
         def n_eval (mu):
             self.kernel (mu, freqs, wts, delta, \
                          conv_tol, dmpf)
-            n_ = self.n_int (delta)
+            n_ = self.n_int (delta, epsrel=0.1*tol)
             print 'mu = ', mu
             print 'nint_n [imag] = ', n_
             return n0-n_
@@ -578,6 +591,8 @@ class DMFT:
             sinf = self._local_sigma(1j*inf_+self.mu, delta)[:,:,0]
         else:
             sinf = self._local_sigma(inf_, delta)[:,:,0]
+        print 'S[inf] ='
+        print sinf
 
         def _eval_en0 (w, delta):
             sigma = self._local_sigma (np.array([w]), delta)
@@ -682,8 +697,8 @@ def hub_2d (nx, ny, U, nw, max_cycle=256, solver_type='scf'):
 
 
 if __name__ == '__main__':
-    dmft, w, delta = hub_1d (30, 1., 15, solver_type='scf')
-    # dmft, w, delta = hub_2d (6, 6, 2., 25, solver_type='scf')
+    dmft, w, delta = hub_1d (90, 4., 5, solver_type='scf')
+    # dmft, w, delta = hub_2d (6, 6, 2., 35, solver_type='scf')
 
     freqs = _get_linear_freqs(-10., 10., 128)[0]
     try:
