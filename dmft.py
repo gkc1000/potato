@@ -6,6 +6,7 @@ import scipy
 import scipy.linalg
 import scipy.optimize
 inv = scipy.linalg.inv
+import h5py
 
 import pyscf
 import pyscf.gto as gto
@@ -20,8 +21,6 @@ import numint_
 
 fci_ = False
 try:
-    from sys import path
-    path.append('/home/carlosjh/other/CheMPS2/PyCheMPS2/build/lib.linux-x86_64-2.7/')
     import PyCheMPS2
     import ctypes
     fci_ = True
@@ -274,7 +273,7 @@ def imp_ham (hcore_cell, eri_cell, bath_v, bath_e):
     return himp, eri_imp
 
 def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
-            delta, conv_tol=1.e-6, dmpf=0.5):
+            delta, conv_tol=1.e-6, dmpf=0.5, chkpt=True):
     """
     DMFT self-consistency
 
@@ -303,6 +302,10 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
         gf_cell += 1./nkpts * \
                    get_gf(hcore_kpts[k,:,:], sigma, freqs, delta)
     hyb = get_sigma(gf0_cell, gf_cell)
+
+    dmft.delta = delta
+    dmft.freqs = freqs
+    dmft.wts   = wts
 
     def _gf_imp (freqs, delta, mf_, corr_=None):
         if dmft.solver_type != 'scf':
@@ -350,19 +353,18 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
         # damping
         hyb = dmpf*hyb_new + (1-dmpf)*hyb
 
+        dmft.hyb   = hyb
+        dmft.sigma = sigma
+        if chkpt:
+            dmft.chkpt()
+
         norm_hyb = np.linalg.norm(hyb-hyb_last)
+        print 'norm_hyb = ', norm_hyb
         
         if (norm_hyb < conv_tol):
             dmft_conv = True
         cycle +=1
-
     dmft.conv_   = dmft_conv
-    dmft.sigma   = sigma
-    dmft.hyb     = hyb
-    dmft.freqs   = freqs
-    dmft.wts     = wts
-    dmft.himp    = himp
-    dmft.eri_imp = eri_imp
 
 def get_bath(hyb, freqs, wts):
     """
@@ -424,18 +426,30 @@ class DMFT:
 
         self.max_cycle   = max_cycle
         self.solver_type = solver_type
+        self.chkfile     = None
 
         # do not touch
         self.mf_   = None
         self.corr_ = None
 
         self.conv_   = False
-        self.sigma   = None
         self.hyb     = None
+        self.sigma   = None
         self.freqs   = None
         self.wts     = None
-        self.himp    = None
-        self.eri_imp = None
+
+    def chkpt (self):
+        if self.chkfile is not None:
+            with h5py.File(self.chkfile, 'w') as fh5:
+                fh5['dmft/hyb']   = self.hyb
+                fh5['dmft/sigma'] = self.sigma
+
+                fh5['dmft/solver_type'] = self.solver_type
+                fh5['dmft/delta']       = self.delta
+                fh5['dmft/freqs']       = self.freqs
+                fh5['dmft/wts']         = self.wts
+                fh5['dmft/hcore_k']     = self.hcore_k
+                fh5['dmft/eri_cell']    = self.eri_cell
 
     def kernel (self, mu, freqs, wts, delta, \
                 conv_tol=1.e-6, dmpf=0.5):
@@ -457,7 +471,7 @@ class DMFT:
         mu = scipy.optimize.newton (n_eval, mu, tol=tol)
         self.mu = mu
 
-    def _gf_imp (self, freqs, delta):
+    def _gf (self, freqs, delta):
         assert (self.conv_)
         if self.solver_type != 'scf':
             assert (self.corr_ is not None)
@@ -470,18 +484,18 @@ class DMFT:
             assert (fci_)
             gf = fci_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
         return gf[:self.nao,:self.nao,:]
-    _gf = _gf_imp
 
     def _gf0 (self, freqs, delta):
-        nb = self.himp.shape[0]-self.nao
+        himp = self.mf_.get_hcore()
+        nb = himp.shape[0]
         nw = len(freqs)
-        sig_dum = np.zeros((nb+self.nao,nb+self.nao,nw))
-        gf = get_gf(self.himp, sig_dum, freqs, delta)
+        sig_dum = np.zeros((nb,nb,nw,))
+        gf = get_gf(himp, sig_dum, freqs, delta)
         return gf[:self.nao,:self.nao,:]
 
     def _local_sigma (self, freqs, delta):
         gf0_ = self._gf0 (freqs, delta)
-        gf1_ = self._gf_imp (freqs, delta)
+        gf1_ = self._gf (freqs, delta)
         return get_sigma(gf0_, gf1_)
 
     def get_ldos (self, freqs, delta, sigma=None):
@@ -843,7 +857,7 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, fill=1., \
 
 if __name__ == '__main__':
     U = 4.
-    # dmft, w, delta = hub_1d (30, U, 15, solver_type='scf')
+    dmft, w, delta = hub_1d (30, U, 15, solver_type='scf')
     # dmft, w, delta = hub_2d (10, 10, U, 9, solver_type='scf')
 
     # dmft, w, delta = hub_cell_1d (30, 2, U, 9, \
