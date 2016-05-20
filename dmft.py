@@ -330,6 +330,7 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
         if dmft.solver_type == 'cc':
             dmft.corr_ = cc_kernel (dmft.mf_)
         elif dmft.solver_type == 'fci':
+            assert (fci_)
             dmft.corr_ = fci_kernel (dmft.mf_)
 
         if dmft.solver_type == 'scf':
@@ -694,6 +695,7 @@ def hub_1d (nx, U, nw, fill=1., chkf=None, \
     dmft = DMFT (hcore_k, eri, \
                  max_cycle=max_cycle, solver_type=solver_type)
     dmft.chkfile = chkf
+    dmft.sigma = U/2.*np.ones([1,1,nw])
 
     wl, wh = -5.+U/2., 5.+U/2.
     delta = _get_delta(hcore_k_)
@@ -719,6 +721,7 @@ def hub_2d (nx, ny, U, nw, fill=1., chkf=None, \
     dmft = DMFT (hcore_k, eri, \
                  max_cycle=max_cycle, solver_type=solver_type)
     dmft.chkfile = chkf
+    dmft.sigma = U/2.*np.ones([1,1,nw])
 
     wl, wh = -7.+U/2., +7.+U/2.
     delta = _get_delta(hcore_k_)
@@ -727,9 +730,12 @@ def hub_2d (nx, ny, U, nw, fill=1., chkf=None, \
     dmft.kernel_nopt (fill, mu0, freqs, wts, delta, dmpf=0.75)
     return dmft, freqs, delta
 
-def hub_cell_1d (nx, isx, U, nw, fill=1., chkf=None, \
+def hub_cell_1d (nx, isx, U, nw, bas=None, fill=1., chkf=None, \
                  max_cycle=256, solver_type='scf'):
     assert (nx % isx == 0)
+    if bas is not None:
+        assert (np.iscomplexobj(bas) == False)
+        assert (bas.shape == (isx,isx))
 
     def nn_hopping (ns):
         t = np.zeros((ns,ns,), dtype=float)
@@ -767,15 +773,25 @@ def hub_cell_1d (nx, isx, U, nw, fill=1., chkf=None, \
                                           eigvals_only=True)
     # print np.sort(hcore_k_.flatten())
     # assert (False)
+    if bas is not None:
+        for k in range(nx_):
+            hcore_k[k,:,:] = np.dot(bas.T, \
+                                    np.dot(hcore_k[k,:,:], bas))
 
     eri = np.zeros([isx,isx,isx,isx])
     for k in range(isx):
         eri[k,k,k,k] = U
+    if bas is not None:
+        eri_ = ao2mo.restore(4, eri, isx)
+        erix = ao2mo.incore.full(eri_, bas, compact=False)
+        eri  = ao2mo.restore(1, erix, isx)
+        del eri_, erix
     mu0 = U/2.
 
     dmft = DMFT (hcore_k, eri, \
                  max_cycle=max_cycle, solver_type=solver_type)
     dmft.chkfile = chkf
+    dmft.sigma = U/2.*np.ones([isx,isx,nw])
 
     wl, wh = -5.+U/2., 5.+U/2.
     delta = _get_delta(hcore_k_.flatten())
@@ -784,10 +800,13 @@ def hub_cell_1d (nx, isx, U, nw, fill=1., chkf=None, \
     dmft.kernel_nopt (fill*isx, mu0, freqs, wts, delta, dmpf=0.75)
     return dmft, freqs, delta
 
-def hub_cell_2d (nx, ny, isx, isy, U, nw, fill=1., chkf=None, \
+def hub_cell_2d (nx, ny, isx, isy, U, nw, bas=None, fill=1., chkf=None, \
                  max_cycle=256, solver_type='scf'):
     assert (nx % isx == 0)
     assert (ny % isy == 0)
+    if bas is not None:
+        assert (np.iscomplexobj(bas) == False)
+        assert (bas.shape == (isy*isx,isy*isx))
 
     def nn_hopping (nx, ny):
         ns = nx*ny
@@ -848,15 +867,25 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, fill=1., chkf=None, \
                                           eigvals_only=True)
     # print np.sort(hcore_k_.flatten())
     # assert (False)
+    if bas is not None:
+        for k in range(ns_):
+            hcore_k[k,:,:] = np.dot(bas.T, \
+                                    np.dot(hcore_k[k,:,:], bas))
 
     eri = np.zeros([isx*isy,isx*isy,isx*isy,isx*isy])
     for k in range(isx*isy):
         eri[k,k,k,k] = U
+    if bas is not None:
+        eri_ = ao2mo.restore(4, eri, isx*isy)
+        erix = ao2mo.incore.full(eri_, bas, compact=False)
+        eri  = ao2mo.restore(1, erix, isx*isy)
+        del eri_, erix
     mu0 = U/2.
 
     dmft = DMFT (hcore_k, eri, \
                  max_cycle=max_cycle, solver_type=solver_type)
     dmft.chkfile = chkf
+    dmft.sigma = U/2.*np.ones([isx*isy,isx*isy,nw])
 
     wl, wh = -7.+U/2., 7.+U/2.
     delta = _get_delta(hcore_k_.flatten())
@@ -881,12 +910,14 @@ if __name__ == '__main__':
         freqs = _get_linear_freqs(-5., 5., 128)[0]
         plt.figure(1)
         dos0 = dmft.get_ldos_ni (freqs, delta)
-        plt.plot(freqs, dos0[0,:])
+        for k in range(dos0.shape[0]):
+            plt.plot(freqs, dos0[k,:])
 
         freqs = _get_linear_freqs(-5.+U/2., 5.+U/2., 128)[0]
         plt.figure(2)
         dos1 = dmft.get_ldos (freqs, delta)
-        plt.plot(freqs, dos1[0,:])
+        for k in range(dos1.shape[0]):
+            plt.plot(freqs, dos1[k,:])
         plt.show()
     except:
         pass
