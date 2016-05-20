@@ -506,6 +506,27 @@ class DMFT:
         gf1_ = self._gf (freqs, delta)
         return get_sigma(gf0_, gf1_)
 
+    def get_lspectral (self, freqs, delta, sigma=None):
+        nw = len(freqs)
+        nao = self.nao
+        nkpts = self.nkpts
+
+        if sigma is None:
+            sigma = self._local_sigma (freqs, delta)
+        spec = np.zeros([nkpts, nao, nw])
+        for k in range(nkpts):
+            gf = get_gf(self.hcore_k[k,:,:], sigma, \
+                        freqs, delta)
+            for l in range(nao):
+                spec[k,l,:] = -1./np.pi * np.imag(gf[l,l,:])
+        return spec
+
+    def get_lspectral_ni (self, freqs, delta):
+        nw = len(freqs)
+        nao = self.nao
+        sigma = np.zeros([nao, nao, nw])
+        return self.get_lspectral (freqs, delta, sigma)
+
     def get_ldos (self, freqs, delta, sigma=None):
         nw = len(freqs)
         nao = self.nao
