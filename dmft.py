@@ -274,8 +274,8 @@ def imp_ham (hcore_cell, eri_cell, bath_v, bath_e):
     eri_imp[:nao,:nao,:nao,:nao] = eri_cell
     return himp, eri_imp
 
-def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
-            delta, conv_tol=1.e-6, dmpf=0.5, chkpt=True):
+def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, delta, \
+            max_cycle, conv_tol=1.e-6, dmpf=0.5, chkpt=True):
     """
     DMFT self-consistency
 
@@ -321,7 +321,7 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, \
             assert (fci_)
             return fci_gf (freqs, delta, corr_, mf_.mo_coeff)
     
-    while not dmft_conv and cycle < max(1, dmft.max_cycle):
+    while not dmft_conv and cycle < max(1, max_cycle):
         hyb_last = hyb
         bath_v, bath_e = get_bath(hyb, freqs, wts)
         himp, eri_imp = imp_ham(hcore_cell, eri_cell, bath_v, bath_e)
@@ -421,8 +421,7 @@ def get_bath(hyb, freqs, wts):
     return bath_v, bath_e
 
 class DMFT:
-    def __init__(self, hcore_k, eri_cell, \
-                 max_cycle=32, solver_type='scf'):
+    def __init__(self, hcore_k, eri_cell, solver_type='scf'):
         self.nkpts, self.nao = hcore_k.shape[:2]
         assert (hcore_k.shape == (self.nkpts, self.nao, self.nao,))
         assert (eri_cell.shape == (self.nao,)*4)
@@ -430,7 +429,6 @@ class DMFT:
         self.hcore_k  = hcore_k
         self.eri_cell = eri_cell
 
-        self.max_cycle   = max_cycle
         self.solver_type = solver_type
         self.chkfile     = None
 
@@ -460,16 +458,17 @@ class DMFT:
                 fh5['dmft/eri_cell']    = self.eri_cell
 
     def kernel (self, mu, freqs, wts, delta, \
-                conv_tol=1.e-6, dmpf=0.5):
+                max_cycle=256, conv_tol=1.e-6, dmpf=0.5):
         self.mu = mu
         kernel (self, self.hcore_k, self.eri_cell, \
-                freqs, wts, delta, conv_tol, dmpf)
+                freqs, wts, delta, max_cycle, conv_tol, dmpf)
 
     def kernel_nopt (self, n0, mu0, freqs, wts, delta, \
-                     conv_tol=1.e-6, dmpf=0.5, tol=1.e-4):
+                     max_cycle=256, conv_tol=1.e-6, dmpf=0.5, \
+                     tol=1.e-4):
         def n_eval (mu):
             self.kernel (mu, freqs, wts, delta, \
-                         conv_tol, dmpf)
+                         max_cycle, conv_tol, dmpf)
             n_ = self.n_int (delta, epsrel=0.1*tol)
             print 'mu = ', mu
             print 'nint_n [imag] = ', n_
@@ -703,7 +702,7 @@ class DMFT:
 
 
 def hub_1d (nx, U, nw, fill=1., chkf=None, \
-            max_cycle=256, solver_type='scf'):
+            conv_tol=1.e-6, max_cycle=256, solver_type='scf'):
     kx = np.arange(-nx/2+1, nx/2+1, dtype=float)
     hcore_k_ = -2*np.cos(2.*np.pi*kx/nx)
     hcore_k  = hcore_k_.reshape([nx,1,1])
@@ -713,8 +712,7 @@ def hub_1d (nx, U, nw, fill=1., chkf=None, \
     # print np.sort(hcore_k_)
     # assert(False)
 
-    dmft = DMFT (hcore_k, eri, \
-                 max_cycle=max_cycle, solver_type=solver_type)
+    dmft = DMFT (hcore_k, eri, solver_type=solver_type)
     dmft.chkfile = chkf
     dmft.sigma = U/2.*np.ones([1,1,nw])
 
@@ -722,11 +720,12 @@ def hub_1d (nx, U, nw, fill=1., chkf=None, \
     delta = _get_delta(hcore_k_)
     #freqs, wts = _get_linear_freqs(wl, wh, nw)
     freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
-    dmft.kernel_nopt (fill, mu0, freqs, wts, delta, dmpf=0.75)
+    dmft.kernel_nopt (fill, mu0, freqs, wts, delta, \
+                      max_cycle, conv_tol, dmpf=0.75)
     return dmft, freqs, delta
 
 def hub_2d (nx, ny, U, nw, fill=1., chkf=None, \
-            max_cycle=256, solver_type='scf'):
+            conv_tol=1.e-6, max_cycle=256, solver_type='scf'):
     kx = np.arange(-nx/2+1, nx/2+1, dtype=float)
     ky = np.arange(-ny/2+1, ny/2+1, dtype=float)
     kx_, ky_ = np.meshgrid(kx,ky)
@@ -739,8 +738,7 @@ def hub_2d (nx, ny, U, nw, fill=1., chkf=None, \
     # print np.sort(hcore_k_)
     # assert(False)
 
-    dmft = DMFT (hcore_k, eri, \
-                 max_cycle=max_cycle, solver_type=solver_type)
+    dmft = DMFT (hcore_k, eri, solver_type=solver_type)
     dmft.chkfile = chkf
     dmft.sigma = U/2.*np.ones([1,1,nw])
 
@@ -748,11 +746,12 @@ def hub_2d (nx, ny, U, nw, fill=1., chkf=None, \
     delta = _get_delta(hcore_k_)
     #freqs, wts = _get_linear_freqs(wl, wh, nw)
     freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
-    dmft.kernel_nopt (fill, mu0, freqs, wts, delta, dmpf=0.75)
+    dmft.kernel_nopt (fill, mu0, freqs, wts, delta, \
+                      max_cycle, conv_tol, dmpf=0.75)
     return dmft, freqs, delta
 
 def hub_cell_1d (nx, isx, U, nw, bas=None, fill=1., chkf=None, \
-                 max_cycle=256, solver_type='scf'):
+                 conv_tol=1.e-5, max_cycle=256, solver_type='scf'):
     assert (nx % isx == 0)
     if bas is not None:
         assert (np.iscomplexobj(bas) == False)
@@ -809,20 +808,22 @@ def hub_cell_1d (nx, isx, U, nw, bas=None, fill=1., chkf=None, \
         del eri_, erix
     mu0 = U/2.
 
-    dmft = DMFT (hcore_k, eri, \
-                 max_cycle=max_cycle, solver_type=solver_type)
+    dmft = DMFT (hcore_k, eri, solver_type=solver_type)
     dmft.chkfile = chkf
-    dmft.sigma = U/2.*np.ones([isx,isx,nw])
+    dmft.sigma = np.empty([isx,isx,nw])
+    for iw in range(nw):
+        dmft.sigma[:,:,iw] = U/2.*np.eye(isx)
 
     wl, wh = -5.+U/2., 5.+U/2.
     delta = _get_delta(hcore_k_.flatten())
     #freqs, wts = _get_linear_freqs(wl, wh, nw)
     freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
-    dmft.kernel_nopt (fill*isx, mu0, freqs, wts, delta, dmpf=0.75)
+    dmft.kernel_nopt (fill*isx, mu0, freqs, wts, delta, \
+                      max_cycle, conv_tol, dmpf=0.5)
     return dmft, freqs, delta
 
 def hub_cell_2d (nx, ny, isx, isy, U, nw, bas=None, fill=1., chkf=None, \
-                 max_cycle=256, solver_type='scf'):
+                 conv_tol=1.e-5, max_cycle=256, solver_type='scf'):
     assert (nx % isx == 0)
     assert (ny % isy == 0)
     if bas is not None:
@@ -903,16 +904,18 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, bas=None, fill=1., chkf=None, \
         del eri_, erix
     mu0 = U/2.
 
-    dmft = DMFT (hcore_k, eri, \
-                 max_cycle=max_cycle, solver_type=solver_type)
+    dmft = DMFT (hcore_k, eri, solver_type=solver_type)
     dmft.chkfile = chkf
-    dmft.sigma = U/2.*np.ones([isx*isy,isx*isy,nw])
+    dmft.sigma = np.empty([isx*isy,isx*isy,nw])
+    for iw in range(nw):
+        dmft.sigma[:,:,iw] = U/2.*np.eye(isx*isy)
 
     wl, wh = -7.+U/2., 7.+U/2.
     delta = _get_delta(hcore_k_.flatten())
     #freqs, wts = _get_linear_freqs(wl, wh, nw)
     freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
-    dmft.kernel_nopt (fill*isx*isy, mu0, freqs, wts, delta, dmpf=0.75)
+    dmft.kernel_nopt (fill*isx*isy, mu0, freqs, wts, delta, \
+                      max_cycle, conv_tol, dmpf=0.5)
     return dmft, freqs, delta
 
 
