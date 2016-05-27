@@ -702,19 +702,25 @@ class DMFT:
 
 
 def hub_1d (nx, U, nw, fill=1., chkf=None, \
-            conv_tol=1.e-6, max_cycle=256, solver_type='scf'):
+            mu0=None, sigma=None, conv_tol=1.e-6, \
+            max_cycle=256, solver_type='scf'):
     kx = np.arange(-nx/2+1, nx/2+1, dtype=float)
     hcore_k_ = -2*np.cos(2.*np.pi*kx/nx)
     hcore_k  = hcore_k_.reshape([nx,1,1])
     eri = np.zeros([1,1,1,1])
     eri[0,0,0,0] = U
-    mu0 = U/2.
+    if mu0 is None:
+        mu0 = U/2.
     # print np.sort(hcore_k_)
     # assert(False)
 
     dmft = DMFT (hcore_k, eri, solver_type=solver_type)
     dmft.chkfile = chkf
-    dmft.sigma = U/2.*np.ones([1,1,nw])
+    if sigma is None:
+        dmft.sigma = U/2.*np.ones([1,1,nw])
+    else:
+        assert (sigma.shape == (1,1,nw,))
+        dmft.sigma = sigma.copy()
 
     wl, wh = -5.+U/2., 5.+U/2.
     delta = _get_delta(hcore_k_)
@@ -725,7 +731,8 @@ def hub_1d (nx, U, nw, fill=1., chkf=None, \
     return dmft, freqs, delta
 
 def hub_2d (nx, ny, U, nw, fill=1., chkf=None, \
-            conv_tol=1.e-6, max_cycle=256, solver_type='scf'):
+            mu0=None, sigma=None, conv_tol=1.e-6, \
+            max_cycle=256, solver_type='scf'):
     kx = np.arange(-nx/2+1, nx/2+1, dtype=float)
     ky = np.arange(-ny/2+1, ny/2+1, dtype=float)
     kx_, ky_ = np.meshgrid(kx,ky)
@@ -734,13 +741,18 @@ def hub_2d (nx, ny, U, nw, fill=1., chkf=None, \
     hcore_k  = hcore_k_.reshape([nx*ny,1,1])
     eri = np.zeros([1,1,1,1])
     eri[0,0,0,0] = U
-    mu0 = U/2.
+    if mu0 is None:
+        mu0 = U/2.
     # print np.sort(hcore_k_)
     # assert(False)
 
     dmft = DMFT (hcore_k, eri, solver_type=solver_type)
     dmft.chkfile = chkf
-    dmft.sigma = U/2.*np.ones([1,1,nw])
+    if sigma is None:
+        dmft.sigma = U/2.*np.ones([1,1,nw])
+    else:
+        assert (sigma.shape == (1,1,nw,))
+        dmft.sigma = sigma.copy()
 
     wl, wh = -7.+U/2., +7.+U/2.
     delta = _get_delta(hcore_k_)
@@ -751,7 +763,8 @@ def hub_2d (nx, ny, U, nw, fill=1., chkf=None, \
     return dmft, freqs, delta
 
 def hub_cell_1d (nx, isx, U, nw, bas=None, fill=1., chkf=None, \
-                 conv_tol=1.e-5, max_cycle=256, solver_type='scf'):
+                 mu0=None, sigma=None, conv_tol=1.e-5, \
+                 max_cycle=256, solver_type='scf'):
     assert (nx % isx == 0)
     if bas is not None:
         assert (np.iscomplexobj(bas) == False)
@@ -806,13 +819,18 @@ def hub_cell_1d (nx, isx, U, nw, bas=None, fill=1., chkf=None, \
         erix = ao2mo.incore.full(eri_, bas, compact=False)
         eri  = ao2mo.restore(1, erix, isx)
         del eri_, erix
-    mu0 = U/2.
+    if mu0 is None:
+        mu0 = U/2.
 
     dmft = DMFT (hcore_k, eri, solver_type=solver_type)
     dmft.chkfile = chkf
-    dmft.sigma = np.empty([isx,isx,nw])
-    for iw in range(nw):
-        dmft.sigma[:,:,iw] = U/2.*np.eye(isx)
+    if sigma is None:
+        dmft.sigma = np.empty([isx,isx,nw])
+        for iw in range(nw):
+            dmft.sigma[:,:,iw] = U/2.*np.eye(isx)
+    else:
+        assert (sigma.shape == (isx,isx,nw,))
+        dmft.sigma = sigma.copy()
 
     wl, wh = -5.+U/2., 5.+U/2.
     delta = _get_delta(hcore_k_.flatten())
@@ -823,7 +841,8 @@ def hub_cell_1d (nx, isx, U, nw, bas=None, fill=1., chkf=None, \
     return dmft, freqs, delta
 
 def hub_cell_2d (nx, ny, isx, isy, U, nw, bas=None, fill=1., chkf=None, \
-                 conv_tol=1.e-5, max_cycle=256, solver_type='scf'):
+                 mu0=None, sigma=None, conv_tol=1.e-5, \
+                 max_cycle=256, solver_type='scf'):
     assert (nx % isx == 0)
     assert (ny % isy == 0)
     if bas is not None:
@@ -902,13 +921,18 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, bas=None, fill=1., chkf=None, \
         erix = ao2mo.incore.full(eri_, bas, compact=False)
         eri  = ao2mo.restore(1, erix, isx*isy)
         del eri_, erix
-    mu0 = U/2.
+    if mu0 is None:
+        mu0 = U/2.
 
     dmft = DMFT (hcore_k, eri, solver_type=solver_type)
     dmft.chkfile = chkf
-    dmft.sigma = np.empty([isx*isy,isx*isy,nw])
-    for iw in range(nw):
-        dmft.sigma[:,:,iw] = U/2.*np.eye(isx*isy)
+    if sigma is None:
+        dmft.sigma = np.empty([isx*isy,isx*isy,nw])
+        for iw in range(nw):
+            dmft.sigma[:,:,iw] = U/2.*np.eye(isx*isy)
+    else:
+        assert (sigma.shape == (isx*isy,isx*isy,nw,))
+        dmft.sigma = sigma.copy()
 
     wl, wh = -7.+U/2., 7.+U/2.
     delta = _get_delta(hcore_k_.flatten())
