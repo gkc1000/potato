@@ -1,4 +1,5 @@
-import math
+#!/usr/bin/python
+
 import numpy as np
 import scipy
 import scipy.linalg
@@ -16,10 +17,13 @@ import numint_
 
 import matplotlib.pyplot as plt
 
-from sys import path
-path.append('/home/carlosjh/other/CheMPS2/PyCheMPS2/build/lib.linux-x86_64-2.7/')
-import PyCheMPS2
-import ctypes
+fci_ = False
+try:
+    import PyCheMPS2
+    import ctypes
+    fci_ = True
+except:
+    pass
 
 
 def _get_delta(h):
@@ -57,20 +61,14 @@ def get_sigma(mf_gf, corr_gf):
         sigma[:,:,iw] = inv(mf_gf[:,:,iw]) - inv(corr_gf[:,:,iw])
     return sigma
 
-def mf_gf (freqs, delta, mo_coeff, mo_energy, nocc):
+def mf_gf (freqs, delta, mo_coeff, mo_energy):
     nw = len(freqs)
     n = mo_coeff.shape[0]
     gf = np.zeros([n, n, nw], np.complex128)
     for iw, w in enumerate(freqs):
-        g_ip = np.diag(1./((w+1j*delta) * \
-                np.ones([nocc],np.complex128) - mo_energy[:nocc]))
-        g_ea = np.diag(1./((w+1j*delta) * \
-                np.ones([n-nocc],np.complex128) - mo_energy[nocc:]))
-        g_ip_ = np.dot(mo_coeff[:,:nocc], np.dot(g_ip, \
-                                                 mo_coeff[:,:nocc].T))
-        g_ea_ = np.dot(mo_coeff[:,nocc:], np.dot(g_ea, \
-                                                 mo_coeff[:,nocc:].T))
-        gf[:,:,iw] = g_ip_+g_ea_
+        g = np.diag(1./((w+1j*delta) * \
+                        np.ones([n], np.complex128) - mo_energy))
+        gf[:,:,iw] = np.dot(mo_coeff, np.dot(g, mo_coeff.T))
     return gf
 
 def cc_gf (freqs, delta, cc_eom, mo_coeff):
@@ -152,9 +150,11 @@ def fci_sol (h0, h1, eri, nel):
 
 def test():
     nao = 6
-    U = 1.0
+    U = 4.0
 
     solver = 'fci'  # 'scf', 'cc', 'fci'
+    if solver == 'fci':
+        assert (fci_)
 
     htb = -1*_tb(nao)
     eri = np.zeros([nao,nao,nao,nao])
@@ -164,7 +164,7 @@ def test():
 
     mol = gto.M()
     mol.build()
-    mol.nelectron = 2 #nao
+    mol.nelectron = 6 #nao
 
     mf = scf.RHF(mol)
     mf.verbose = 0
@@ -207,10 +207,33 @@ def test():
         cc_eom.l1 = cc.l1
         cc_eom.l2 = cc.l2
 
+        e_vector = list()
+        b_vector = list()
+        for q in range(nao):
+            e_vector.append(greens_function.greens_e_vector_ip_rhf(cc_eom,q))
+            b_vector.append(greens_function.greens_b_vector_ip_rhf(cc_eom,q))
+
+        dm = np.zeros((nao,nao,), np.complex128)
+        for q in range(nao):
+            for p in range(nao):
+                dm[p,q] = -np.dot(e_vector[q], b_vector[p])
+        hc = np.dot(mf.mo_coeff.T, np.dot(mf.get_hcore(), mf.mo_coeff))
+
         print 'CC IP evals'
-        print cc_eom.ipccsd()[0]
-        print 'CC EA evals'
-        print cc_eom.eaccsd()[0]
+        evals, evecs = cc_eom.ipccsd(nroots=e_vector[0].shape[0])
+        print evals
+        A = np.dot(evecs, np.dot(np.diag(evals), inv(evecs)))
+
+        dt = np.zeros((nao,nao,), np.complex128)
+        for q in range(nao):
+            for p in range(nao):
+                dt[p,q] = np.dot(e_vector[q], np.dot(A, b_vector[p]))
+
+        nn = 2*0.5*np.trace(dm).real
+        ee = 2*0.5*np.trace(np.dot(dm, hc)).real \
+             + 2*0.5*np.trace(dt).real
+        print 'N = %16.8f' % (nn)
+        print 'E = %16.8f' % (ee)
 
     elif solver == 'fci':
         h0   = 0.
@@ -227,31 +250,26 @@ def test():
     mu = ( mf.mo_energy[mol.nelectron//2-1] + \
            mf.mo_energy[mol.nelectron//2] )/2.
     #mu += 0.05
-    nocc = mol.nelectron//2
 
     delta_ = 1.e-4
     def _gf (w, delta):
         if solver == 'scf':
-            return mf_gf (w, delta, mf.mo_coeff, mf.mo_energy, nocc)
+            return mf_gf (w, delta, mf.mo_coeff, mf.mo_energy)
         elif solver == 'cc':
             return cc_gf (w, delta, cc_eom, mf.mo_coeff)
         elif solver == 'fci':
             return fci_gf (w, delta, mf.mo_coeff, en_FCIgs, GSvector, \
                            HamCheMPS2, theFCI)
     def _mf_gf (w, delta):
-        return mf_gf (w, delta, evecs, evals, nocc)
+        return mf_gf (w, delta, evecs, evals)
 
-    freqs_ = _get_linear_freqs(-10., 10., 64)[0]
-    gf0 = mf_gf (freqs_, delta, evecs, evals, nocc)
-    gf1 = _gf (freqs_, delta)
-    dos0 = np.zeros([freqs_.shape[0]])
-    dos1 = np.zeros([freqs_.shape[0]])
+    freqs_ = _get_linear_freqs(-6+U/2., 6+U/2., 128)[0]
+    gfx = _gf (freqs_, delta)
+    dos = np.zeros([freqs_.shape[0]])
     for k in range(nao):
-       dos0[:] += -1./np.pi * np.imag(gf0[k,k,:])
-       dos1[:] += -1./np.pi * np.imag(gf1[k,k,:])
+       dos[:] += -1./np.pi * np.imag(gfx[k,k,:])
 
-    plt.plot(freqs_, dos0)
-    plt.plot(freqs_, dos1)
+    plt.plot(freqs_, dos)
     plt.show()
 
     def _eval_p(w, delta):
@@ -331,25 +349,27 @@ def test():
         plt.plot(freqs_, fni3)
         plt.show()
 
+    li = True
     lr = False
 
     # NL = # poles to left of mu, NR = # poles to right of mu
     # nao = NL + NR
     # integration gives NR - NL (factor of 2 in imag_fn)
-    print '\nnumber of electrons'
-    if True:
+    if li:
+        print '\nnumber [imag]'
         nint_n = numint_.int_quad_imag (_eval_n, mu, \
                                         epsrel=1.0e-4, delta=delta_)
         nint_n = 2*0.5*(nao-nint_n)
         print 'nint_n [imag] = ', nint_n
-        # additional factor of 2 by spin integration
+        print '----\n'
     if lr:
+        print '\nnumber [real]'
         nint_n = numint_.int_quad_real (_eval_n, mu, x0=-40., \
                                         epsrel=1.0e-4, delta=delta_)
         print 'nint_n [real] = ', 2*nint_n
-    print '----\n'
+        print '----\n'
 
-    if True:
+    if li:
         print 'energy [imag]'
         # trace of h with GF
         nint_e0 = numint_.int_quad_imag (_eval_en0, mu, \
@@ -371,6 +391,7 @@ def test():
 
     if lr:
         print 'energy [real]'
+        # trace of h with GF
         nint_e0 = numint_.int_quad_real (_eval_en0, mu, x0=-40., \
                                          epsrel=1.0e-4, delta=delta_)
         print 'nint H_c    [real] = ', 2*nint_e0
