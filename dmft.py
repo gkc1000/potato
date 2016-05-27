@@ -852,9 +852,9 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, bas=None, fill=1., chkf=None, \
         U = np.zeros((ns,ns,), dtype=complex)
         sx = np.arange(nx, dtype=float)
         sy = np.arange(ny, dtype=float)
-        scry, scrx = np.meshgrid(sx,sy)
-        scrx = scrx.reshape((ns,), order='F')
-        scry = scry.reshape((ns,), order='F')
+        scrx, scry = np.meshgrid(sx,sy, indexing='ij')
+        scrx = scrx.reshape((ns,))
+        scry = scry.reshape((ns,))
         k = 0
         for kx in range(nx):
             kkx = (2.0*np.pi/nx)*kx
