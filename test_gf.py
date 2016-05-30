@@ -152,7 +152,7 @@ def test():
     nao = 6
     U = 4.0
 
-    solver = 'fci'  # 'scf', 'cc', 'fci'
+    solver = 'cc'  # 'scf', 'cc', 'fci'
     if solver == 'fci':
         assert (fci_)
 
@@ -263,7 +263,7 @@ def test():
     def _mf_gf (w, delta):
         return mf_gf (w, delta, evecs, evals)
 
-    freqs_ = _get_linear_freqs(-6+U/2., 6+U/2., 128)[0]
+    freqs_ = _get_linear_freqs(-6+U/2., 6+U/2., 32)[0]
     gfx = _gf (freqs_, delta)
     dos = np.zeros([freqs_.shape[0]])
     for k in range(nao):
@@ -304,7 +304,7 @@ def test():
         else:
             return np.trace(np.dot(sigma[:,:,0]-sigma_infr, gf_[:,:,0]))
 
-    lplt = False
+    lplt = True
 
     if lplt:
         def real_fn(w, gf_fn):
@@ -312,10 +312,10 @@ def test():
         def imag_fn(w, gf_fn):
             return -2./np.pi * np.real(gf_fn(1j*w+mu, delta_))
 
-        fnr0 = np.zeros_like(freqs_)
-        fnr1 = np.zeros_like(freqs_)
-        fnr2 = np.zeros_like(freqs_)
-        fnr3 = np.zeros_like(freqs_)
+        #fnr0 = np.zeros_like(freqs_)
+        #fnr1 = np.zeros_like(freqs_)
+        #fnr2 = np.zeros_like(freqs_)
+        #fnr3 = np.zeros_like(freqs_)
         fni0 = np.zeros_like(freqs_)
         fni1 = np.zeros_like(freqs_)
         fni2 = np.zeros_like(freqs_)
@@ -323,23 +323,23 @@ def test():
         wmin = np.min(freqs_)
         wmax = np.max(freqs_)
         for iw, w in enumerate(freqs_):
-            fnr0[iw] = real_fn(w+mu, _eval_n)
-            fnr1[iw] = real_fn(w+mu, _eval_en0)
-            fnr2[iw] = real_fn(w+mu, _eval_en1)
-            fnr3[iw] = real_fn(w+mu, _eval_en2)
+            #fnr0[iw] = real_fn(w+mu, _eval_n)
+            #fnr1[iw] = real_fn(w+mu, _eval_en0)
+            #fnr2[iw] = real_fn(w+mu, _eval_en1)
+            #fnr3[iw] = real_fn(w+mu, _eval_en2)
             fni0[iw] = imag_fn(w, _eval_n)
             fni1[iw] = imag_fn(w, _eval_en0)
             fni2[iw] = imag_fn(w, _eval_en1)
             fni3[iw] = imag_fn(w, _eval_en2)
 
-        plt.plot(freqs_+mu, fnr0)
-        plt.figure()
-        plt.plot(freqs_+mu, fnr1)
-        plt.figure()
-        plt.plot(freqs_+mu, fnr2)
-        plt.figure()
-        plt.plot(freqs_+mu, fnr3)
-        plt.figure()
+        #plt.plot(freqs_+mu, fnr0)
+        #plt.figure()
+        #plt.plot(freqs_+mu, fnr1)
+        #plt.figure()
+        #plt.plot(freqs_+mu, fnr2)
+        #plt.figure()
+        #plt.plot(freqs_+mu, fnr3)
+        #plt.figure()
         plt.plot(freqs_, fni0)
         plt.figure()
         plt.plot(freqs_, fni1)
@@ -349,7 +349,7 @@ def test():
         plt.plot(freqs_, fni3)
         plt.show()
 
-    li = True
+    li = False
     lr = False
 
     # NL = # poles to left of mu, NR = # poles to right of mu
