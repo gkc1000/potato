@@ -9,7 +9,7 @@ import pyscf
 import pyscf.gto as gto
 import pyscf.scf as scf
 import pyscf.cc.ccsd as ccsd
-import pyscf.cc.rccsd_eom as rccsd_eom
+import pyscf.cc.eom_rccsd as eom_rccsd
 import pyscf.ao2mo as ao2mo
 
 import greens_function
@@ -71,16 +71,16 @@ def mf_gf (freqs, delta, mo_coeff, mo_energy):
         gf[:,:,iw] = np.dot(mo_coeff, np.dot(g, mo_coeff.T))
     return gf
 
-def cc_gf (freqs, delta, cc_eom, mo_coeff):
+def cc_gf (freqs, delta, cc, mo_coeff):
     n = mo_coeff.shape[0]
     nw = len(freqs)
     gip = np.zeros((n,n,nw), np.complex128)
     gea = np.zeros((n,n,nw), np.complex128)
     gf = greens_function.greens_function()
     # Calculate full (p,q) GF matrix in MO basis
-    g_ip = gf.solve_ip(cc_eom, range(n), range(n), \
+    g_ip = gf.solve_ip(cc, range(n), range(n), \
                        freqs.conj(), delta).conj()
-    g_ea = gf.solve_ea(cc_eom, range(n), range(n), \
+    g_ea = gf.solve_ea(cc, range(n), range(n), \
                        freqs, delta)
 
     # Change basis from MO to AO
@@ -149,8 +149,8 @@ def fci_sol (h0, h1, eri, nel):
     return HamCheMPS2, theFCI, GSvector, EnergyCheMPS2
 
 def test():
-    nao = 6
-    U = 4.0
+    nao = 2
+    U = 2.
 
     solver = 'cc'  # 'scf', 'cc', 'fci'
     if solver == 'fci':
@@ -160,11 +160,13 @@ def test():
     eri = np.zeros([nao,nao,nao,nao])
     for k in range(nao):
         eri[k,k,k,k] = U
-    delta = _get_delta(htb)
+    #delta = _get_delta(htb)
 
+    delta = 0.01
+    
     mol = gto.M()
     mol.build()
-    mol.nelectron = 6 #nao
+    mol.nelectron = 2 #nao
 
     mf = scf.RHF(mol)
     mf.verbose = 0
@@ -182,6 +184,7 @@ def test():
     print mf.mo_energy
     print '----\n'
 
+    
     HamCheMPS2, theFCI = None, None
     if solver == 'cc':
         cc = ccsd.CCSD(mf)
@@ -192,36 +195,42 @@ def test():
         cc.solve_lambda()
 
         print "Repeating with EOM CCSD"
-        cc_eom = rccsd_eom.RCCSD(mf)
+        #cc_eom = eom_rccsd.RCCSD(mf)
+        # cc_eomip = eom_rccsd.EOMIP(cc)
+        # cc_eomea = eom_rccsd.EOMEA(cc)
 
-        def ao2mofn_ (mol, bas, compact):
-            return ao2mo.incore.general(mf._eri, bas, compact=compact)
+        #def ao2mofn_ (mol, bas, compact):
+        #    return ao2mo.incore.general(mf._eri, bas, compact=compact)
 
-        eri_eom = rccsd_eom._ERIS(cc_eom, ao2mofn=ao2mofn_)
-        ecc_eom = cc_eom.ccsd(eris=eri_eom)[0]
-        print "EOM-CCSD corr = %20.12f" % (ecc_eom)
-        print '====\n'
+        #eri_eom = eom_rccsd._ERIS(cc_eom, ao2mofn=ao2mofn_)
+        #ecc_eom = cc_eom.ccsd(eris=eri_eom)[0]
+        #print "EOM-CCSD corr = %20.12f" % (ecc_eom)
+        #print '====\n'
 
         #cc_eom.t1 = cc.t1
         #cc_eom.t2 = cc.t2
-        cc_eom.l1 = cc.l1
-        cc_eom.l2 = cc.l2
+        #cc_eom.l1 = cc.l1
+        #cc_eom.l2 = cc.l2
 
         e_vector = list()
         b_vector = list()
         for q in range(nao):
-            e_vector.append(greens_function.greens_e_vector_ip_rhf(cc_eom,q))
-            b_vector.append(greens_function.greens_b_vector_ip_rhf(cc_eom,q))
+            e_vector.append(greens_function.greens_e_vector_ip_rhf(cc,q))
+            b_vector.append(greens_function.greens_b_vector_ip_rhf(cc,q))
 
         dm = np.zeros((nao,nao,), np.complex128)
         for q in range(nao):
             for p in range(nao):
                 dm[p,q] = -np.dot(e_vector[q], b_vector[p])
+        print dm.real
         hc = np.dot(mf.mo_coeff.T, np.dot(mf.get_hcore(), mf.mo_coeff))
 
         print 'CC IP evals'
-        evals, evecs = cc_eom.ipccsd(nroots=e_vector[0].shape[0])
+        eomip = eom_rccsd.EOMIP(cc)
+        evals, evecs = eomip.ipccsd(nroots=e_vector[0].shape[0])
         print evals
+
+        # these are sums over principal poles
         A = np.dot(evecs, np.dot(np.diag(evals), inv(evecs)))
 
         dt = np.zeros((nao,nao,), np.complex128)
@@ -251,12 +260,13 @@ def test():
            mf.mo_energy[mol.nelectron//2] )/2.
     #mu += 0.05
 
-    delta_ = 1.e-4
+    delta_ = 0.01
+    #delta_ = 0.1
     def _gf (w, delta):
         if solver == 'scf':
             return mf_gf (w, delta, mf.mo_coeff, mf.mo_energy)
         elif solver == 'cc':
-            return cc_gf (w, delta, cc_eom, mf.mo_coeff)
+            return cc_gf (w, delta, cc, mf.mo_coeff)
         elif solver == 'fci':
             return fci_gf (w, delta, mf.mo_coeff, en_FCIgs, GSvector, \
                            HamCheMPS2, theFCI)
@@ -278,13 +288,19 @@ def test():
     def _eval_n(w, delta):
         return np.trace(_eval_p(w, delta))
 
-    mf_infi = _mf_gf(np.array([1j*1000000.+mu]), delta_)
-    gf_infi = _gf(np.array([1j*1000000.+mu]), delta_)
-    sigma_infi = get_sigma(mf_infi, gf_infi)[:,:,0]
+    powers = [10**i for i in range(7)]
+    for LARGE in powers:
+        #LARGE = 100000000
+        mf_infi = _mf_gf(np.array([1j*LARGE+mu]), delta_)
+        gf_infi = _gf(np.array([1j*LARGE+mu]), delta_)
+        sigma_infi = get_sigma(mf_infi, gf_infi)[:,:,0]
 
-    mf_infr = _mf_gf(np.array([1000000.]), delta_)
-    gf_infr = _gf(np.array([1000000.]), delta_)
-    sigma_infr = get_sigma(mf_infr, gf_infr)[:,:,0]
+        mf_infr = _mf_gf(np.array([LARGE]), delta_)
+        gf_infr = _gf(np.array([LARGE]), delta_)
+        sigma_infr = get_sigma(mf_infr, gf_infr)[:,:,0]
+
+        print LARGE, sigma_infi[0,0]
+        print LARGE, sigma_infr[0,0]
 
     def _eval_en0(w, delta):
         gf_ = _gf(np.array([w]), delta)
@@ -304,7 +320,7 @@ def test():
         else:
             return np.trace(np.dot(sigma[:,:,0]-sigma_infr, gf_[:,:,0]))
 
-    lplt = True
+    lplt = False
 
     if lplt:
         def real_fn(w, gf_fn):
@@ -349,41 +365,53 @@ def test():
         plt.plot(freqs_, fni3)
         plt.show()
 
-    li = False
+    li = True
     lr = False
 
     # NL = # poles to left of mu, NR = # poles to right of mu
     # nao = NL + NR
     # integration gives NR - NL (factor of 2 in imag_fn)
+    INF=10000
     if li:
+
         print '\nnumber [imag]'
+        #nint_n = numint_.int_quad_imag (_eval_n, mu, \
+        #                                epsrel=1.0e-5, delta=delta_)
         nint_n = numint_.int_quad_imag (_eval_n, mu, \
-                                        epsrel=1.0e-4, delta=delta_)
+                                        epsrel=1.0e-5, delta=delta_)
         nint_n = 2*0.5*(nao-nint_n)
         print 'nint_n [imag] = ', nint_n
         print '----\n'
     if lr:
         print '\nnumber [real]'
         nint_n = numint_.int_quad_real (_eval_n, mu, x0=-40., \
-                                        epsrel=1.0e-4, delta=delta_)
+                                        epsrel=1.0e-5, delta=delta_)
+        nint_n = numint_.int_quad_real (_eval_n, mu, x0=-40., \
+                                        epsrel=1.0e-5, delta=delta_)
         print 'nint_n [real] = ', 2*nint_n
         print '----\n'
 
     if li:
         print 'energy [imag]'
         # trace of h with GF
+        #nint_e0 = numint_.int_quad_imag (_eval_en0, mu, \
+        #                                 epsrel=1.0e-5, delta=delta_)
         nint_e0 = numint_.int_quad_imag (_eval_en0, mu, \
-                                         epsrel=1.0e-4, delta=delta_)
+                                         epsrel=1.0e-5, delta=delta_)
         print 'nint H_c    [imag] = ', -nint_e0
 
         # energy due to 1/w self-energy
+        #nint_e2 = numint_.int_quad_imag (_eval_en2, mu, \
+        #                                 epsrel=1.0e-5, delta=delta_)
         nint_e2 = numint_.int_quad_imag (_eval_en2, mu, \
-                                         epsrel=1.0e-4, delta=delta_)
+                                         epsrel=1.0e-5, delta=delta_)
         print 'nint S[w]   [imag] = ', -nint_e2/2.
 
         # energy due to a constant self-energy
+        #nint_e1 = numint_.int_quad_imag (_eval_en1, mu, \
+        #                                 epsrel=1.0e-5, delta=delta_)
         nint_e1 = numint_.int_quad_imag (_eval_en1, mu, \
-                                         epsrel=1.0e-4, delta=delta_)
+                                         epsrel=1.0e-5, delta=delta_)
         e1 = (np.real(np.trace(sigma_infi)) - nint_e1)
         print 'nint S[inf] [imag] = ', e1/2
         print 'nint_e = ', -nint_e0 + e1/2. -nint_e2/2.
@@ -393,17 +421,17 @@ def test():
         print 'energy [real]'
         # trace of h with GF
         nint_e0 = numint_.int_quad_real (_eval_en0, mu, x0=-40., \
-                                         epsrel=1.0e-4, delta=delta_)
+                                         epsrel=1.0e-5, delta=delta_)
         print 'nint H_c    [real] = ', 2*nint_e0
 
         # energy due to 1/w self-energy
         nint_e2 = numint_.int_quad_real (_eval_en2, mu, x0=-40., \
-                                         epsrel=1.0e-4, delta=delta_)
+                                         epsrel=1.0e-5, delta=delta_)
         print 'nint S[w]   [real] = ', nint_e2
 
         # energy due to a constant self-energy
         nint_e1 = numint_.int_quad_real (_eval_en1, mu, x0=-40., \
-                                         epsrel=1.0e-4, delta=delta_)
+                                         epsrel=1.0e-5, delta=delta_)
         print 'nint S[inf] [real] = ', nint_e1
         print 'nint_e = ', 2*nint_e0 + nint_e1 + nint_e2
         print '----\n'

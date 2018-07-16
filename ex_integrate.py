@@ -2,6 +2,8 @@ import numpy as np
 import scipy.linalg
 import scipy.integrate
 
+COUNTER = 0
+
 def _tb(n):
     """
     Tight-binding Hamiltonian
@@ -16,11 +18,8 @@ def _tb(n):
     h[-1,0]=1.
     return h
 
-def correlated_gf(freqs):
-    pass
-
-def gf(w, delta):
-    e = np.array([-4.,-3.,-2., -1.])
+def gf(w, delta, nao=4):
+    e = np.array([-i for i in range(nao)])
     gf = np.diag(1./(w + 1j*delta - e))
     return gf
 
@@ -84,6 +83,9 @@ def integrate():
     print "imag axis E0", .5 * (np.trace(sigma0(mu, nao)) - scipy.integrate.quad(imag_e0_fn,0,10000)[0])
     
     # energy due to 1/w self-energy
-    print "imag axis E1", -.5 * scipy.integrate.quad(imag_e1_fn,0,10000)[0]
+    
+    #print "imag axis E1", -.5 * scipy.integrate.quad(imag_e1_fn,0,10000)[0]
+    stuff = scipy.integrate.quad(imag_e1_fn,0,10000,full_output=True)
+    print -.5* stuff[0], stuff[2]["neval"]
 
 
