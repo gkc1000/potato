@@ -1,6 +1,7 @@
 import collections
 
 import numpy as np
+import scipy
 import gminres
 
 import pyscf
@@ -99,6 +100,83 @@ class greens_function:
     def __init__(self, verbose=0):
         self.verbose = verbose
 
+    def td_ip(self,cc,ps,qs,ti,tf,times):
+        """
+        E0: total CC gs energy
+        ti: initial time
+        tf: final time
+        times: list of times where GF is computed
+
+        Signs, etc. Defn. at https://edoc.ub.uni-muenchen.de/18937/1/Wolf_Fabian_A.pdf, pg. 141
+        corresponds to G^<(it) in Eq. A.3
+        """
+        eomip=pyscf.cc.eom_rccsd.EOMIP(cc)
+        E0 = cc.e_tot
+        
+        if not isinstance(ps, collections.Iterable): ps = [ps]
+        if not isinstance(qs, collections.Iterable): qs = [qs]
+        
+        if self.verbose > 0:
+            print " solving ip portion..."
+
+        e_vector = list() 
+        for q in qs:
+            e_vector.append(greens_e_vector_ip_rhf(cc,q))
+
+            gfvals = np.zeros((len(ps),len(qs),len(times)),dtype=complex)
+
+        for ip,p in enumerate(ps):
+            b_vector = greens_b_vector_ip_rhf(cc,p)
+            
+            def matr_multiply(t,vector,args=None):
+                # note: t is a dummy time argument
+                return 1j*np.array(eomip.matvec(vector) - E0*vector)
+            
+            solp = scipy.integrate.solve_ivp(matr_multiply,(ti,tf),
+                                            b_vector,t_eval=times)
+
+            # for t in range(solp.y.shape[1]):
+            #     print "norm", times[t], scipy.linalg.norm(solp.y[:,t])
+                
+            for iq,q in enumerate(qs):
+                gfvals[iq,ip,:]  = np.dot(e_vector[iq],solp.y)
+
+        return gfvals
+
+    def td_ea(self,cc,ps,qs,ti,tf,times):
+        """
+        See td_ip.
+
+        Defn. at https://edoc.ub.uni-muenchen.de/18937/1/Wolf_Fabian_A.pdf, pg. 141
+        corresponds to G^>(it) in Eq. A.3
+        """        
+        eomea=pyscf.cc.eom_rccsd.EOMEA(cc)
+        E0 = cc.e_tot
+        
+        if not isinstance(ps, collections.Iterable): ps = [ps]
+        if not isinstance(qs, collections.Iterable): qs = [qs]
+        if self.verbose > 0:
+            print " solving ip portion..."
+
+        e_vector = list()
+        for p in ps:
+            e_vector.append(greens_e_vector_ea_rhf(cc,p))
+        gfvals = np.zeros((len(ps),len(qs),len(times)),dtype=complex)
+
+        for iq,q in enumerate(qs):
+            b_vector = greens_b_vector_ea_rhf(cc,q)
+
+            def matr_multiply(t,vector,args=None):
+                # t is a dummy time argument
+                return -1j*np.array(eomea.matvec(vector) - E0*vector)
+
+            solq = scipy.integrate.solve_ivp(matr_multiply,(ti,tf),
+                                            b_vector,t_eval=times)
+            
+            for ip,p in enumerate(ps):
+                gfvals[ip,iq,:]  = np.dot(e_vector[iq],solq.y)
+        return gfvals
+        
     def solve_ip(self,cc,ps,qs,omega_list,broadening):
 
         eomip=pyscf.cc.eom_rccsd.EOMIP(cc)
