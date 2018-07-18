@@ -15,7 +15,7 @@ import pyscf.gto as gto
 #import pyscf.scf as scf
 import scf_mu as scf
 import pyscf.cc.ccsd as ccsd
-import pyscf.cc.rccsd_eom as rccsd_eom
+import pyscf.cc.eom_rccsd as eom_rccsd
 import pyscf.ao2mo as ao2mo
 
 import greens_function
@@ -95,35 +95,35 @@ def cc_kernel (mf_):
     CISD = False
 
     print "Solving CCSD equations..."
-    cc = ccsd.CCSD(mf_)
+    cc = ccsd.RCCSD(mf_)
     ecc = cc.ccsd()[0]
     print "CCSD corr = %20.12f" % (ecc)
 
     print "Solving lambda equations..."
     cc.solve_lambda()
 
-    print "Solving EOM CCSD"
-    cc_eom = rccsd_eom.RCCSD(mf_)
+    # print "Solving EOM CCSD"
+    # cc_eom = eom_rccsd.RCCSD(mf_)
 
-    def ao2mofn_ (mol, bas, compact):
-        return ao2mo.incore.general(mf_._eri, bas, compact=compact)
+    # def ao2mofn_ (mol, bas, compact):
+    #     return ao2mo.incore.general(mf_._eri, bas, compact=compact)
 
-    eri_eom = rccsd_eom._ERIS(cc_eom, ao2mofn=ao2mofn_)
-    ecc_eom = cc_eom.ccsd(eris=eri_eom)[0]
-    print "EOM-CCSD corr = %20.12f" % (ecc_eom)
+    # eri_eom = eom_rccsd._ERIS(cc_eom, ao2mofn=ao2mofn_)
+    # ecc_eom = cc_eom.ccsd(eris=eri_eom)[0]
+    # print "EOM-CCSD corr = %20.12f" % (ecc_eom)
     print '====\n'
 
     #cc_eom.t1 = cc.t1
     #cc_eom.t2 = cc.t2
-    cc_eom.l1 = cc.l1
-    cc_eom.l2 = cc.l2
+    #cc_eom.l1 = cc.l1
+    #cc_eom.l2 = cc.l2
 
-    if CISD == True:
-        cc_eom.t1 *= 1e-5
-        cc_eom.t2 *= 1e-5
-        cc_eom.l1 *= 1e-5
-        cc_eom.l2 *= 1e-5
-    return cc_eom
+    # if CISD == True:
+    #     cc_eom.t1 *= 1e-5
+    #     cc_eom.t2 *= 1e-5
+    #     cc_eom.l1 *= 1e-5
+    #     cc_eom.l2 *= 1e-5
+    return cc #cc_eom
 
 class FCIsol:
     def __init__ (self, HamCheMPS2, theFCI, GSvector, GSenergy):
@@ -189,16 +189,16 @@ def mf_gf (freqs, delta, mo_coeff, mo_energy):
         gf[:,:,iw] = np.dot(mo_coeff, np.dot(g, mo_coeff.T))
     return gf
 
-def cc_gf (freqs, delta, cc_eom, mo_coeff):
+def cc_gf (freqs, delta, cc, mo_coeff):
     n = mo_coeff.shape[0]
     nw = len(freqs)
     gip = np.zeros((n,n,nw), np.complex128)
     gea = np.zeros((n,n,nw), np.complex128)
     gf = greens_function.greens_function()
     # Calculate full (p,q) GF matrix in MO basis
-    g_ip = gf.solve_ip(cc_eom, range(n), range(n), \
+    g_ip = gf.solve_ip(cc, range(n), range(n), \
                        freqs.conj(), delta).conj()
-    g_ea = gf.solve_ea(cc_eom, range(n), range(n), \
+    g_ea = gf.solve_ea(cc, range(n), range(n), \
                        freqs, delta)
 
     # Change basis from MO to AO
@@ -944,8 +944,8 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, bas=None, fill=1., chkf=None, \
 
 
 if __name__ == '__main__':
-    U = 4.
-    # dmft, w, delta = hub_1d (30, U, 15, solver_type='scf')
+    U = 2.
+    dmft, w, delta = hub_1d (30, U, 5, solver_type='cc')
     # dmft, w, delta = hub_2d (10, 10, U, 9, solver_type='scf')
 
     # dmft, w, delta = hub_cell_1d (30, 2, U, 9, \
