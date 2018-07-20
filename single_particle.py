@@ -44,7 +44,6 @@ def get_gfw(gft, times, freqs, delta):
         for p in range(gft.shape[0]):
             for q in range(gft.shape[1]):
                 gfw[p,q,iw] = scipy.integrate.romb(ftwts * gft[p,q])
-                #gfw[p,q,iw] = scipy.integrate.romb(ftwts * gft[p,q].imag)
 
     return gfw
 

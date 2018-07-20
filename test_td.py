@@ -1,3 +1,44 @@
+#!/usr/bin/python
+
+import math
+import numpy as np
+import scipy
+import scipy.linalg
+inv = scipy.linalg.inv
+
+import pyscf
+import pyscf.gto as gto
+import pyscf.scf as scf
+import pyscf.cc.ccsd as ccsd
+import pyscf.cc.eom_rccsd as eom_rccsd
+import pyscf.ao2mo as ao2mo
+
+import greens_function
+import numint_
+
+import matplotlib.pyplot as plt
+
+def _get_linear_freqs(wl, wh, nw):
+    freqs = np.linspace(wl, wh, nw) 
+    wts = np.ones([nw]) * (wh - wl) / (nw - 1.)
+    return freqs, wts
+
+
+def _tb(n):
+    """
+    Tight-binding Hamiltonian
+    """
+    h=np.zeros([n,n])
+
+    for i in range(n):
+        for j in range(n):
+            if abs(i-j)==1:
+                h[i,j]=1.
+    h[0,-1]=1.
+    h[-1,0]=1.
+    return h
+
+
 def cc_td_gf(ti, tf, times, cc_eom, mo_coeff):
     n = mo_coeff.shape[0]
     nt = len(times)
@@ -88,7 +129,7 @@ def test_td():
 
     dos = np.zeros([freqs_.shape[0]])
     for k in range(nao):
-        dos[:] += -1./np.pi * np.imag(gf_ret_w[k,k,:])
+        dos[:] += 1./np.pi * np.imag(gf_ret_w[k,k,:])
 
     plt.plot(freqs_, dos)
     plt.show()

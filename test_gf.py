@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+import math
 import numpy as np
 import scipy
 import scipy.linalg
@@ -71,6 +72,9 @@ def mf_gf (freqs, delta, mo_coeff, mo_energy):
         gf[:,:,iw] = np.dot(mo_coeff, np.dot(g, mo_coeff.T))
     return gf
 
+
+    
+    
 def cc_gf (freqs, delta, cc, mo_coeff):
     n = mo_coeff.shape[0]
     nw = len(freqs)
@@ -157,12 +161,14 @@ def test():
         assert (fci_)
 
     htb = -1*_tb(nao)
+    htb[0,0]=0.0
+
     eri = np.zeros([nao,nao,nao,nao])
     for k in range(nao):
         eri[k,k,k,k] = U
     #delta = _get_delta(htb)
 
-    delta = 0.01
+    delta=0.01
     
     mol = gto.M()
     mol.build()
@@ -260,8 +266,6 @@ def test():
            mf.mo_energy[mol.nelectron//2] )/2.
     #mu += 0.05
 
-    delta_ = 0.01
-    #delta_ = 0.1
     def _gf (w, delta):
         if solver == 'scf':
             return mf_gf (w, delta, mf.mo_coeff, mf.mo_energy)
@@ -273,7 +277,7 @@ def test():
     def _mf_gf (w, delta):
         return mf_gf (w, delta, evecs, evals)
 
-    freqs_ = _get_linear_freqs(-6+U/2., 6+U/2., 32)[0]
+    freqs_ = _get_linear_freqs(-6+U/2., 6+U/2., 64)[0]
     gfx = _gf (freqs_, delta)
     dos = np.zeros([freqs_.shape[0]])
     for k in range(nao):
