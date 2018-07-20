@@ -1,4 +1,6 @@
 import numpy as np
+import scipy
+import scipy.linalg
 
 def get_linear_freqs(wl, wh, nw):
     freqs = np.linspace(wl, wh, nw) 
@@ -59,12 +61,47 @@ def generate_prediction(a, x, ntotal):
     predicted_x = np.zeros([ntotal], np.complex128)
     predicted_x[:nobs] = x
     p = len(a)
-    for n in range(nobs, ntotal):
+    for n in range(nobs, ntotal):        
         for i in range(p):
             predicted_x[n] -= a[i] * predicted_x[n-i-1]
 
     return predicted_x
-                     
+
+def generate_prediction2(a, x, ntotal):
+    """
+    extrapolation formula
+    x_n = -\sum_{i=0}^{p-1} a_i x_{n-i-1}
+    """
+    nobs = len(x)
+    assert ntotal > nobs
+    predicted_x = np.zeros([ntotal], np.complex128)
+    predicted_x[:nobs] = x
+
+    p=len(a)
+    history_x = np.zeros([p], np.complex128)
+    for i in range(p):
+        history_x[i] = predicted_x[nobs-i-1]
+
+    matA = np.zeros([p, p], np.complex128)
+    matA[0]=-a
+    matA[1:p,0:p-1]=np.eye(p-1)
+
+    eig, rv = scipy.linalg.eig(matA)
+    lv = scipy.linalg.inv(rv)
+
+    # project out growing eigenvectors
+    for i, e in enumerate(eig):
+        if abs(e) > 1.:
+            eig[i] = 0.
+            
+    pmatA = np.dot(rv, np.dot(np.diag(eig), lv))
+
+    for n in range(nobs, ntotal):        
+        history_x = np.dot(pmatA, history_x)
+        predicted_x[n] = history_x[0]
+    return predicted_x
+
+
 def predict_gf(gf, ntotal):
     """
     GF prediction, following
@@ -86,6 +123,20 @@ def predict_gf(gf, ntotal):
         for q in range(gf.shape[1]):
             
             a = linear_prediction(gf[p,q,:], nfit, nfit)
-            predicted_x = generate_prediction(a, gf[p,q,:], ntotal)
+            predicted_x = generate_prediction2(a, gf[p,q,:], ntotal)
             predicted_gf[p,q,:] = predicted_x
     return predicted_gf
+
+def get_gfw(gft, times, freqs, delta):
+    """
+    frequency transform of GF with Gaussian broadening delta
+    """
+    ti,tf=times[0],times[-1]
+    gfw = np.zeros([gft.shape[0],gft.shape[1],len(freqs)], np.complex128)
+    for iw, w in enumerate(freqs):
+        ftwts = 1./(tf-ti) * np.exp(1j*w*times) * np.exp(-.5*delta**2*(times**2))
+        for p in range(gft.shape[0]):
+            for q in range(gft.shape[1]):
+                gfw[p,q,iw] = scipy.integrate.romb(ftwts * gft[p,q])
+
+    return gfw

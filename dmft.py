@@ -21,6 +21,8 @@ import pyscf.ao2mo as ao2mo
 import greens_function
 import numint_
 
+import tools
+
 fci_ = False
 try:
     import PyCheMPS2
@@ -189,11 +191,50 @@ def mf_gf (freqs, delta, mo_coeff, mo_energy):
         gf[:,:,iw] = np.dot(mo_coeff, np.dot(g, mo_coeff.T))
     return gf
 
+def tdcc_gf(freqs, delta, cc, mo_coeff, ti=0, tf=5, nobs=50, tmax0=100, tol=1.e-5):
+    n = mo_coeff.shape[0]
+
+    times = np.linspace(ti,tf,nobs)
+    deltat = float(tf - ti) / nobs
+
+    # predict out to long times
+    # note ntotal must be 2**n+1 since
+    # we use romberg integration to do fourier transform integral
+    ntotal0 = tmax0 / deltat
+
+    nbase2 = np.int(np.log(ntotal0)/np.log(2))
+    ntotal = 2**nbase2+1
+    
+    gf = greens_function.greens_function()
+    gip = -gf.td_ip(cc, range(n), range(n),
+                    times, tol)
+
+    gea = -gf.td_ea(cc, range(n), range(n),
+                    times, tol)
+
+    # 2*pi/tmax gives a minimum oscillation frequency, so
+    # graph will wiggle at least on this scale
+    print "Total propagation time: ", ntotal * deltat
+    predicted_gf_ip = tools.predict_gf(gip, ntotal)
+    predicted_gf_ea = tools.predict_gf(gea, ntotal)
+
+    gret = -1j * (predicted_gf_ip + predicted_gf_ea)
+    gret_ao = np.einsum("pi,ijt,jq->pqt", mo_coeff, gret, mo_coeff.T)
+
+    extrapolated_times = np.array([deltat*i for i in range(ntotal)])
+    tmax = extrapolated_times[-1]
+
+    gf_w = tools.get_gfw(gret_ao, extrapolated_times,
+                         freqs, delta)
+
+    return gf_w
+    
+    
 def cc_gf (freqs, delta, cc, mo_coeff):
     n = mo_coeff.shape[0]
     nw = len(freqs)
-    gip = np.zeros((n,n,nw), np.complex128)
-    gea = np.zeros((n,n,nw), np.complex128)
+    #gip = np.zeros((n,n,nw), np.complex128)
+    #gea = np.zeros((n,n,nw), np.complex128)
     gf = greens_function.greens_function()
     # Calculate full (p,q) GF matrix in MO basis
     g_ip = gf.solve_ip(cc, range(n), range(n), \
@@ -317,6 +358,8 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, delta, \
             return mf_gf (freqs, delta, mf_.mo_coeff, mf_.mo_energy)
         elif dmft.solver_type == 'cc':
             return cc_gf (freqs, delta, corr_, mf_.mo_coeff)
+        elif dmft.solver_type == 'tdcc':
+            return tdcc_gf (freqs, delta, corr_, mf_.mo_coeff)
         elif dmft.solver_type == 'fci':
             assert (fci_)
             return fci_gf (freqs, delta, corr_, mf_.mo_coeff)
@@ -329,16 +372,24 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, delta, \
         dmft.mf_ = mf_kernel (himp, eri_imp, dmft.mu)
         if dmft.solver_type == 'cc':
             dmft.corr_ = cc_kernel (dmft.mf_)
+        elif dmft.solver_type == 'tdcc':
+            dmft.corr_ = cc_kernel (dmft.mf_)
         elif dmft.solver_type == 'fci':
             assert (fci_)
             dmft.corr_ = fci_kernel (dmft.mf_)
 
         if dmft.solver_type == 'scf':
             gf_imp = _gf_imp (freqs, delta, dmft.mf_)
-        elif dmft.solver_type in ('cc', 'fci'):
+        elif dmft.solver_type in ('cc', 'tdcc', 'fci'):
             gf_imp = _gf_imp (freqs, delta, dmft.mf_, dmft.corr_)
         gf_imp = gf_imp[:nao,:nao,:]
 
+        from matplotlib import pyplot as plt
+        print gf_imp[0,0]
+        plt.plot(freqs, -1./np.pi*gf_imp[0,0].imag)
+        plt.show()
+
+        
         nb = bath_e.shape[0]
         sgdum = np.zeros((nb+nao,nb+nao,nw))
         gf0_imp = get_gf(himp, sgdum, freqs, delta)
@@ -487,6 +538,8 @@ class DMFT:
                         self.mf_.mo_coeff, self.mf_.mo_energy)
         elif self.solver_type == 'cc':
             gf = cc_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
+        elif self.solver_type == 'tdcc':
+            gf = tdcc_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
         elif self.solver_type == 'fci':
             assert (fci_)
             gf = fci_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
@@ -933,7 +986,7 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, bas=None, fill=1., chkf=None, \
     else:
         assert (sigma.shape == (isx*isy,isx*isy,nw,))
         dmft.sigma = sigma.copy()
-
+        
     wl, wh = -7.+U/2., 7.+U/2.
     delta = _get_delta(hcore_k_.flatten())
     #freqs, wts = _get_linear_freqs(wl, wh, nw)
@@ -944,8 +997,12 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, bas=None, fill=1., chkf=None, \
 
 
 if __name__ == '__main__':
+    test()
+    
+def test():
     U = 2.
-    dmft, w, delta = hub_1d (30, U, 5, solver_type='cc')
+    #dmft, w, delta = hub_1d (30, U, 5, solver_type='cc')
+    dmft, w, delta = hub_1d (4, U, 5, solver_type='tdcc')
     # dmft, w, delta = hub_2d (10, 10, U, 9, solver_type='scf')
 
     # dmft, w, delta = hub_cell_1d (30, 2, U, 9, \
