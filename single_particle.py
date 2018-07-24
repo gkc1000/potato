@@ -9,7 +9,7 @@ import pyscf.scf as scf
 import pyscf.lib.diis
 import matplotlib.pyplot as plt
 
-from tools import *
+import tools
 
 def get_gip(eigs, nocc, times):
     n = eigs.shape[0]
@@ -33,95 +33,11 @@ def get_gea(eigs, nocc, times):
         gea[a,a,:] = np.exp(-1j*eigs[a]*times)
     return gea
 
-def get_gfw(gft, times, freqs, delta):
-    """
-    frequency transform of GF with Gaussian broadening delta
-    """
-    ti,tf=times[0],times[-1]
-    gfw = np.zeros([gft.shape[0],gft.shape[1],len(freqs)], np.complex128)
-    for iw, w in enumerate(freqs):
-        ftwts = 1./(tf-ti) * np.exp(1j*w*times) * np.exp(-.5*delta**2*(times**2))
-        for p in range(gft.shape[0]):
-            for q in range(gft.shape[1]):
-                gfw[p,q,iw] = scipy.integrate.romb(ftwts * gft[p,q])
-
-    return gfw
-
-def linear_prediction(x, p, nfit):
-    """
-    Linear prediction following notation in: 
-    https://arxiv.org/pdf/0901.2342.pdf
-
-    x: ndarray of complex data
-    p: number of fit coefficients
-    nfit: number of points to fit over (reasonable choice is len(x)/2)
-
-    returns: ndarray a, which can be used in the 
-    extrapolation formula
-    x_n = -\sum_{i=0}^p a_i x_{n-i-1}
-    """
-    nvalues = len(x)
-    R = np.zeros([p,p], np.complex128)
-    r = np.zeros([p], np.complex128)
-    a = np.zeros([p], np.complex128)
-    for i in range(p):
-        for j in range(p):
-            for n in range(nvalues-nfit,nvalues):
-                R[j,i] += np.conj(x[n-j-1]) * x[n-i-1]
-
-    for j in range(p):
-        for n in range(nvalues-nfit,nvalues):
-            r[j] += np.conj(x[n-j-1])*x[n]
-
-    a = - np.dot(scipy.linalg.pinv(R), r)
-
-    return a
-
-def generate_prediction(a, x, ntotal):
-    """
-    extrapolation formula
-    x_n = -\sum_{i=0}^{p-1} a_i x_{n-i-1}
-    """
-    nobs = len(x)
-    assert ntotal > nobs
-    predicted_x = np.zeros([ntotal], np.complex128)
-    predicted_x[:nobs] = x
-    p = len(a)
-    for n in range(nobs, ntotal):
-        for i in range(p):
-            predicted_x[n] -= a[i] * predicted_x[n-i-1]
-
-    return predicted_x
-                     
-def predict_gf(gf, ntotal):
-    """
-    GF prediction, following
-    https://arxiv.org/pdf/0901.2342.pdf
-
-    currently predict for each element separately, could try for all elements together.
-
-    ntotal: total number of time points
-
-    returns: predicted GF
-    """
-    predicted_gf = np.zeros([gf.shape[0], gf.shape[1], ntotal],
-                            dtype=gf.dtype)
-    nobs = gf.shape[2]
-    predicted_gf[:,:,:nobs] = gf
-
-    nfit = nobs/2
-    for p in range(gf.shape[0]):
-        for q in range(gf.shape[1]):
-            
-            a = linear_prediction(gf[p,q,:], nfit, nfit)
-            predicted_x = generate_prediction(a, gf[p,q,:], ntotal)
-            predicted_gf[p,q,:] = predicted_x
-    return predicted_gf
 
 def test():
     nao = 2
 
-    htb = -1*tb(nao)
+    htb = -1*tools.tb(nao)
     htb[0,0]=0.0
     eri = np.zeros([nao,nao,nao,nao])
     
@@ -166,8 +82,8 @@ def test():
     # graph will wiggle at least on this scale
     print "Total propagation time: ", ntotal * deltat
     
-    predicted_gf_ip = predict_gf(gip, ntotal)
-    predicted_gf_ea = predict_gf(gea, ntotal)
+    predicted_gf_ip = tools.predict_gf(gip, ntotal)
+    predicted_gf_ea = tools.predict_gf(gea, ntotal)
     
     gret = -1j * (predicted_gf_ip + predicted_gf_ea)
     gret_ao = np.einsum("pi,ijt,jq->pqt", mf.mo_coeff, gret, mf.mo_coeff.T)
@@ -185,8 +101,8 @@ def test():
     freqs = np.linspace(-1.2, -0.8, 1000)
     delta = 3.e-3 # this should be on the scale of pi/tmax
 
-    gf_w = get_gfw(gret_ao, extrapolated_times,
-                   freqs, delta)
+    gf_w = tools.get_gfw(gret_ao, extrapolated_times,
+                         freqs, delta)
 
     # when you see the peak, in addition to the broadening
     # there is also a small real shift (on the size of the broadening);

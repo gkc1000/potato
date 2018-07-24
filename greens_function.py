@@ -1,5 +1,4 @@
 import collections
-
 import numpy as np
 import scipy
 import gminres
@@ -96,43 +95,172 @@ def initial_ea_guess(cc):
     vector2 = np.zeros((nocc,nvir,nvir),dtype=complex)
     return amplitudes_to_vector_ea(vector1,vector2)
 
+
+def ip_shape(cc):
+    nocc, nvir = cc.t1.shape
+    return nocc + nocc*nocc*nvir
+
+def ea_shape(cc):
+    nocc, nvir = cc.t1.shape
+    return nvir + nocc*nvir*nvir
+
 class greens_function:
     def __init__(self, verbose=0):
         self.verbose = verbose
 
-    def td_ip(self,cc,ps,qs,times,tol=1.e-5):
+
+    def td_ip_ao(self,cc,ps,times,mo_coeff,re_im="re",tol=1.e-5):
         """
         E0: total CC gs energy
         ti: initial time
         tf: final time
         times: list of times where GF is computed
         tol : rtol, atol for ODE integrator
+                   
+        mo_coeff : integrals are assumed in the MO basis
+        they are supplied here so we can back transform
+        to the AO basis
+
+        re_im in {"re", "im"}
 
         Signs, etc. Defn. at https://edoc.ub.uni-muenchen.de/18937/1/Wolf_Fabian_A.pdf, pg. 141
-        corresponds to G^<(it) in Eq. A.3
+        re_im = "re" corresponds to G^<(it) in Eq. A.3, with t = times
+        re_im = "im" corresponds to G^<(\tau) in Eq. A.2, with \tau = times        
         """
+        dtype = None
+        tfac = None
+        if re_im == "im":
+            dtype = np.float64
+            tfac = 1
+        elif re_im == "re":
+            dtype = np.complex128
+            tfac = 1j
+        else:
+            raise RuntimeError
+
+        # set initial bra/ket
+        nmo = mo_coeff.shape[1]
+        e_vector_mo = np.zeros([nmo, ip_shape(cc)], dtype=dtype)
+        for i in range(nmo):
+            e_vector_mo[i,:] = greens_e_vector_ip_rhf(cc,i)    
+        e_vector_ao = np.einsum("pi,ix->px", mo_coeff[ps,:], e_vector_mo)
+            
+        b_vector_mo = np.zeros([ip_shape(cc), nmo], dtype=dtype)
+        for i in range(nmo):
+            b_vector_mo[:,i] = greens_b_vector_ip_rhf(cc,i)    
+        b_vector_ao = np.einsum("xi,ip->xp", b_vector_mo, mo_coeff.T[:,ps])
+
+        # initialize loop variables
+        gf_ao = np.zeros((len(ps),len(ps),len(times)),dtype=dtype)
         eomip=pyscf.cc.eom_rccsd.EOMIP(cc)
         ti=times[0]
         tf=times[-1]
-        
-        if not isinstance(ps, collections.Iterable): ps = [ps]
-        if not isinstance(qs, collections.Iterable): qs = [qs]
-        
-        if self.verbose > 0:
-            print " solving ip portion..."
 
-        e_vector = list() 
+        def matr_multiply(t,vector):
+            # note: t is a dummy time argument, H is time-independent
+            return tfac*np.array(eomip.matvec(vector))
+
+        for ip,p in enumerate(ps):            
+            solp = scipy.integrate.solve_ivp(matr_multiply,(ti,tf),
+                                             b_vector_ao[:,p],t_eval=times,
+                                             rtol=tol,atol=tol)
+
+            for iq,q in enumerate(ps):
+                gf_ao[iq,ip,:]  = np.dot(e_vector_ao[iq],solp.y)
+
+        return gf_ao
+
+    def td_ea_ao(self,cc,ps,times,mo_coeff,re_im="re",tol=1.e-5):
+        """
+        See td_ip.
+        
+        Defn. at https://edoc.ub.uni-muenchen.de/18937/1/Wolf_Fabian_A.pdf, pg. 141
+        corresponds to G^>(it) in Eq. A.3
+        """
+        dtype = None
+        tfac = None
+        if re_im == "im":
+            dtype = np.float64
+            tfac = -1
+        elif re_im == "re":
+            dtype = np.complex128
+            tfac = -1j
+        else:
+            raise RuntimeError
+
+        # set initial bra/ket
+        nmo = mo_coeff.shape[1]
+        e_vector_mo = np.zeros([nmo, ea_shape(cc)], dtype=dtype)
+        for i in range(nmo):
+            e_vector_mo[i,:] = greens_e_vector_ea_rhf(cc,i)    
+        e_vector_ao = np.einsum("pi,ix->px", mo_coeff[ps,:], e_vector_mo)
+            
+        b_vector_mo = np.zeros([ea_shape(cc), nmo], dtype=dtype)
+        for i in range(nmo):
+            b_vector_mo[:,i] = greens_b_vector_ea_rhf(cc,i)    
+        b_vector_ao = np.einsum("xi,ip->xp", b_vector_mo, mo_coeff.T[:,ps])
+
+        # initialize loop variables
+        gf_ao = np.zeros((len(ps),len(ps),len(times)),dtype=dtype)
+        eomea=pyscf.cc.eom_rccsd.EOMEA(cc)
+        ti=times[0]
+        tf=times[-1]
+
+        def matr_multiply(t,vector):
+            # note: t is a dummy time argument, H is time-independent
+            return tfac*np.array(eomea.matvec(vector))
+
+        for ip,p in enumerate(ps):            
+            solp = scipy.integrate.solve_ivp(matr_multiply,(ti,tf),
+                                             b_vector_ao[:,p],t_eval=times,
+                                             rtol=tol,atol=tol)
+
+            for iq,q in enumerate(ps):
+                gf_ao[iq,ip,:]  = np.dot(e_vector_ao[iq],solp.y)
+
+        return gf_ao
+
+    def td_ip(self,cc,ps,qs,times,re_im="re",tol=1.e-5):
+        """
+        E0: total CC gs energy
+        ti: initial time
+        tf: final time
+        times: list of times where GF is computed
+        tol : rtol, atol for ODE integrator
+                   
+        re_im in {"re", "im"}
+
+        Signs, etc. Defn. at https://edoc.ub.uni-muenchen.de/18937/1/Wolf_Fabian_A.pdf, pg. 141
+        re_im = "re" corresponds to G^<(it) in Eq. A.3, with t = times
+        re_im = "im" corresponds to G^<(\tau) in Eq. A.2, with \tau = times        
+        """
+        dtype = None
+        tfac = None
+        if re_im == "im":
+            dtype = np.float64
+            tfac = 1
+        elif re_im == "re":
+            dtype = np.complex128
+            tfac = 1j
+        else:
+            raise RuntimeError
+        
+        eomip=pyscf.cc.eom_rccsd.EOMIP(cc)
+        ti=times[0]
+        tf=times[-1]
+
+        e_vector = list()
         for q in qs:
             e_vector.append(greens_e_vector_ip_rhf(cc,q))
 
-            gfvals = np.zeros((len(ps),len(qs),len(times)),dtype=np.complex128)
+        gfvals = np.zeros((len(ps),len(qs),len(times)),dtype=dtype)
 
         for ip,p in enumerate(ps):
-            b_vector = np.array(greens_b_vector_ip_rhf(cc,p), dtype=np.complex128)
+            b_vector = np.array(greens_b_vector_ip_rhf(cc,p), dtype=dtype)
             
             def matr_multiply(t,vector,args=None):
-                # note: t is a dummy time argument
-                res = 1j*np.array(eomip.matvec(vector))
+                # note: t is a dummy time argument, H is time-independent
+                res = tfac*np.array(eomip.matvec(vector))
                 return res
             
             solp = scipy.integrate.solve_ivp(matr_multiply,(ti,tf),
@@ -143,33 +271,39 @@ class greens_function:
 
         return gfvals
 
-    def td_ea(self,cc,ps,qs,times,tol=1.e-5):
+    def td_ea(self,cc,ps,qs,times,re_im="re",tol=1.e-5):
         """
         See td_ip.
 
         Defn. at https://edoc.ub.uni-muenchen.de/18937/1/Wolf_Fabian_A.pdf, pg. 141
         corresponds to G^>(it) in Eq. A.3
         """
+        dtype = None
+        tfac = None
+        if re_im == "im":
+            dtype = np.float64
+            tfac = -1
+        elif re_im == "re":
+            dtype = np.complex128
+            tfac = -1j
+        else:
+            raise RuntimeError
+
         ti=times[0]
         tf=times[-1]
         eomea=pyscf.cc.eom_rccsd.EOMEA(cc)
         
-        if not isinstance(ps, collections.Iterable): ps = [ps]
-        if not isinstance(qs, collections.Iterable): qs = [qs]
-        if self.verbose > 0:
-            print " solving ip portion..."
-
         e_vector = list()
         for p in ps:
-            e_vector.append(np.array(greens_e_vector_ea_rhf(cc,p), np.complex128))
+            e_vector.append(np.array(greens_e_vector_ea_rhf(cc,p), dtype=dtype))
         gfvals = np.zeros((len(ps),len(qs),len(times)),dtype=complex)
         
         for iq,q in enumerate(qs):
-            b_vector = np.array(greens_b_vector_ea_rhf(cc,q), dtype=np.complex128)
+            b_vector = np.array(greens_b_vector_ea_rhf(cc,q), dtype=dtype)
 
             def matr_multiply(t,vector,args=None):
                 # t is a dummy time argument
-                res =  -1j*np.array(eomea.matvec(vector))
+                res =  tfac*np.array(eomea.matvec(vector))
                 return res
 
             solq = scipy.integrate.solve_ivp(matr_multiply,(ti,tf),
@@ -178,18 +312,74 @@ class greens_function:
             for ip,p in enumerate(ps):
                 gfvals[ip,iq,:]  = np.dot(e_vector[ip],solq.y)
         return gfvals
-        
-    def solve_ip(self,cc,ps,qs,omega_list,broadening):
 
+    def solve_ip_ao(self,cc,ps,omega_list,mo_coeff,broadening):
         eomip=pyscf.cc.eom_rccsd.EOMIP(cc)
-        #cc=eom._cc
-        ####
-        #cc.l2 = np.zeros_like(cc.l2)
+        # GKC: Why is this is the initial guess?
+        x0 = initial_ip_guess(cc)
+        p0 = 0.0*x0 + 1.0
+
+        # set initial bra/ket
+        nmo = mo_coeff.shape[1]
+        e_vector_mo = np.zeros([nmo, ip_shape(cc)], dtype=np.complex128)
+        for i in range(nmo):
+            e_vector_mo[i,:] = greens_e_vector_ip_rhf(cc,i)    
+        e_vector_ao = np.einsum("pi,ix->px", mo_coeff[ps,:], e_vector_mo)
+        b_vector_mo = np.zeros([ip_shape(cc), nmo], dtype=np.complex128)
+        for i in range(nmo):
+            b_vector_mo[:,i] = greens_b_vector_ip_rhf(cc,i)    
+        b_vector_ao = np.einsum("xi,ip->xp", b_vector_mo, mo_coeff.T[:,ps])
+        # initialize loop variables
+        gf_ao = np.zeros((len(ps),len(ps),len(omega_list)),dtype=np.complex128)
         
-        if not isinstance(ps, collections.Iterable): ps = [ps]
-        if not isinstance(qs, collections.Iterable): qs = [qs]
-        if self.verbose > 0:
-            print " solving ip portion..."
+        for ip,p in enumerate(ps):
+            for iomega in range(len(omega_list)):
+                curr_omega = omega_list[iomega]
+                def matr_multiply(vector,args=None):
+                    return greens_func_multiply(eomip.matvec, vector, curr_omega-1j*broadening)
+                solver = gminres.gMinRes(matr_multiply,b_vector_ao[:,p],x0,p0)
+                #solver = gminres.exactInverse(matr_multiply,b_vector,x0)
+                sol = solver.get_solution().reshape(-1)
+                x0  = sol
+                for iq,q in enumerate(ps):
+                    gf_ao[ip,iq,iomega]  = -np.dot(e_vector_ao[iq,:],sol)
+        return gf_ao
+
+    def solve_ea_ao(self,cc,ps,omega_list,mo_coeff,broadening):
+        eomea=pyscf.cc.eom_rccsd.EOMEA(cc)
+        # GKC: Why is this is the initial guess?
+        x0 = initial_ea_guess(cc)
+        p0 = 0.0*x0 + 1.0
+
+        # set initial bra/ket
+        nmo = mo_coeff.shape[1]
+        e_vector_mo = np.zeros([nmo, ea_shape(cc)], dtype=np.complex128)
+        for i in range(nmo):
+            e_vector_mo[i,:] = greens_e_vector_ea_rhf(cc,i)    
+        e_vector_ao = np.einsum("pi,ix->px", mo_coeff[ps,:], e_vector_mo)
+        b_vector_mo = np.zeros([ea_shape(cc), nmo], dtype=np.complex128)
+        for i in range(nmo):
+            b_vector_mo[:,i] = greens_b_vector_ea_rhf(cc,i)    
+        b_vector_ao = np.einsum("xi,ip->xp", b_vector_mo, mo_coeff.T[:,ps])
+        # initialize loop variables
+        gf_ao = np.zeros((len(ps),len(ps),len(omega_list)),dtype=np.complex128)
+        
+        for iq,q in enumerate(ps):
+            for iomega in range(len(omega_list)):
+                curr_omega = omega_list[iomega]
+                def matr_multiply(vector,args=None):
+                    return greens_func_multiply(eomea.matvec, vector, -curr_omega-1j*broadening)
+                solver = gminres.gMinRes(matr_multiply,b_vector_ao[:,q],x0,p0)
+                #solver = gminres.exactInverse(matr_multiply,b_vector,x0)
+                sol = solver.get_solution().reshape(-1)
+                x0  = sol
+                for ip,p in enumerate(ps):
+                    gf_ao[ip,iq,iomega] = np.dot(e_vector_ao[ip],sol)
+
+        return gf_ao
+       
+    def solve_ip(self,cc,ps,qs,omega_list,broadening):
+        eomip=pyscf.cc.eom_rccsd.EOMIP(cc)
         x0 = initial_ip_guess(cc)
         p0 = 0.0*x0 + 1.0
         e_vector = list() 
@@ -215,14 +405,6 @@ class greens_function:
 
     def solve_ea(self,cc,ps,qs,omega_list,broadening):
         eomea=pyscf.cc.eom_rccsd.EOMEA(cc)
-        ####
-        #cc.l2 = np.zeros_like(cc.l2)
-
-        
-        if not isinstance(ps, collections.Iterable): ps = [ps]
-        if not isinstance(qs, collections.Iterable): qs = [qs]
-        if self.verbose > 0:
-            print " solving ea portion..."
         x0 = initial_ea_guess(cc)
         p0 = 0.0*x0 + 1.0
         e_vector = list() 

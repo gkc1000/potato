@@ -29,7 +29,7 @@ def get_ea(cc, norbs, times, tol):
                      times, tol)
 
 def test():
-    nao = 6
+    nao = 2
 
     htb = -1*tb(nao)
     htb[0,0] = 0.01 # make it non-symmetric
@@ -37,7 +37,7 @@ def test():
     
     mol = gto.M()
     mol.build()
-    mol.nelectron = 4 #nao
+    mol.nelectron = 2 #nao
 
     mf = scf.RHF(mol)
     mf.verbose = 0

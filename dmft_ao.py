@@ -87,8 +87,8 @@ def mf_kernel (himp, eri_imp, mu):
     mf._eri = ao2mo.restore(8, eri_imp, n)
     mf.init_guess = '1e'  # currently needed
 
-    print "MF H"
-    print mf.get_hcore()
+    # print "MF H"
+    # print mf.get_hcore()
     
     _ = mf.scf()
     print 'MF energy = %20.12f\n' % (mf.e_tot)
@@ -195,7 +195,7 @@ def mf_gf (freqs, delta, mo_coeff, mo_energy):
         gf[:,:,iw] = np.dot(mo_coeff, np.dot(g, mo_coeff.T))
     return gf
 
-def tdcc_gf(freqs, delta, cc, mo_coeff, ti=0, tf=40, nobs=800, tmax0=10000, tol=1.e-5):
+def tdcc_gf(freqs, delta, cc, mo_coeff, ti=0, tf=40, nobs=800, tmax0=10000, tol=1.e-7):
     """
     I think tf should something like ~2pi * energy width. For example
     if U=8, then tf=40 works well.
@@ -223,32 +223,65 @@ def tdcc_gf(freqs, delta, cc, mo_coeff, ti=0, tf=40, nobs=800, tmax0=10000, tol=
     gea = -gf.td_ea(cc, range(n), range(n),
                     times, re_im="re", tol=tol)
 
-    PREDICT = True
-    if PREDICT:
-        # 2*pi/tmax gives a minimum oscillation frequency, so
-        # graph will wiggle at least on this scale
-        print "Total propagation time: ", ntotal * deltat
-        predicted_gf_ip = tools.predict_gf(gip, ntotal)
-        predicted_gf_ea = tools.predict_gf(gea, ntotal)
+    # 2*pi/tmax gives a minimum oscillation frequency, so
+    # graph will wiggle at least on this scale
+    print "Total propagation time: ", ntotal * deltat
+    predicted_gf_ip = tools.predict_gf(gip, ntotal)
+    predicted_gf_ea = tools.predict_gf(gea, ntotal)
         
-        gret = -1j * (predicted_gf_ip + predicted_gf_ea)
-        gret_ao = np.einsum("pi,ijt,jq->pqt", mo_coeff, gret, mo_coeff.T)
+    gret = -1j * (predicted_gf_ip + predicted_gf_ea)
+    gret_ao = np.einsum("pi,ijt,jq->pqt", mo_coeff, gret, mo_coeff.T)
         
-        extrapolated_times = np.array([deltat*i for i in range(ntotal)])
-        tmax = extrapolated_times[-1]
+    extrapolated_times = np.array([deltat*i for i in range(ntotal)])
+    tmax = extrapolated_times[-1]
         
-        gf_w = tools.get_gfw(gret_ao, extrapolated_times,
-                             freqs, delta)
-    else:
-        gret = -1j * (gip + gea)
-        gret_ao = np.einsum("pi,ijt,jq->pqt", mo_coeff, gret, mo_coeff.T)
+    gf_w = tools.get_gfw(gret_ao, extrapolated_times,
+                         freqs, delta)
+    
+    return gf_w
 
-        gf_w = tools.get_gfw(gret_ao, times,
-                             freqs, delta)
+def tdcc_gf_ao(nimp, freqs, delta, cc, mo_coeff, ti=0, tf=40, nobs=800, tmax0=10000, tol=1.e-5):
+    """
+    See tdcc_gf.
+    """
+    n = mo_coeff.shape[0]
+
+    times = np.linspace(ti,tf,nobs)
+    deltat = float(tf - ti) / nobs
+
+    # predict out to long times
+    # note ntotal must be 2**n+1 since
+    # we use romberg integration to do fourier transform integral
+    ntotal0 = tmax0 / deltat
+
+    nbase2 = np.int(np.log(ntotal0)/np.log(2))
+    ntotal = 2**nbase2+1
+    
+    gf = greens_function.greens_function()
+    gip = -gf.td_ip_ao(cc, range(nimp), 
+                       times, mo_coeff, re_im="re", tol=tol)
+
+    gea = -gf.td_ea_ao(cc, range(nimp), 
+                       times, mo_coeff, re_im="re", tol=tol)
+
+    # 2*pi/tmax gives a minimum oscillation frequency, so
+    # graph will wiggle at least on this scale
+    print "Total propagation time: ", ntotal * deltat
+    predicted_gf_ip = tools.predict_gf(gip, ntotal)
+    predicted_gf_ea = tools.predict_gf(gea, ntotal)
+        
+    gret_ao = -1j * (predicted_gf_ip + predicted_gf_ea)
+        
+    extrapolated_times = np.array([deltat*i for i in range(ntotal)])
+    tmax = extrapolated_times[-1]
+    gf_w = tools.get_gfw(gret_ao, extrapolated_times,
+                         freqs, delta)
 
     return gf_w
-    
-    
+
+
+
+
 def cc_gf (freqs, delta, cc, mo_coeff):
     n = mo_coeff.shape[0]
     nw = len(freqs)
@@ -268,6 +301,22 @@ def cc_gf (freqs, delta, cc, mo_coeff):
         g_ea_ = np.dot(mo_coeff, np.dot(g_ea[:,:,iw], mo_coeff.T))
         gf[:,:,iw] = g_ip_+g_ea_
     return gf
+
+
+def cc_gf_ao (nimp, freqs, delta, cc, mo_coeff):
+    n = mo_coeff.shape[0]
+    nw = len(freqs)
+    #gip = np.zeros((n,n,nw), np.complex128)
+    #gea = np.zeros((n,n,nw), np.complex128)
+    gf = greens_function.greens_function()
+    # Calculate full (p,q) GF matrix in MO basis
+    g_ip = gf.solve_ip_ao(cc, range(nimp), \
+                          freqs.conj(), mo_coeff, delta).conj()
+    g_ea = gf.solve_ea_ao(cc, range(nimp), \
+                          freqs, mo_coeff, delta)
+
+    return g_ip + g_ea
+
 
 def fci_gf (freqs, delta, fcisol, mo_coeff):
     n  = mo_coeff.shape[0]
@@ -377,8 +426,12 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, delta, \
             return mf_gf (freqs, delta, mf_.mo_coeff, mf_.mo_energy)
         elif dmft.solver_type == 'cc':
             return cc_gf (freqs, delta, corr_, mf_.mo_coeff)
+        elif dmft.solver_type == 'cc_ao':
+            return cc_gf_ao (nao, freqs, delta, corr_, mf_.mo_coeff)
         elif dmft.solver_type == 'tdcc':
             return tdcc_gf (freqs, delta, corr_, mf_.mo_coeff)
+        elif dmft.solver_type == 'tdcc_ao':
+            return tdcc_gf_ao (nao, freqs, delta, corr_, mf_.mo_coeff)
         elif dmft.solver_type == 'fci':
             assert (fci_)
             return fci_gf (freqs, delta, corr_, mf_.mo_coeff)
@@ -389,9 +442,7 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, delta, \
         himp, eri_imp = imp_ham(hcore_cell, eri_cell, bath_v, bath_e)
 
         dmft.mf_ = mf_kernel (himp, eri_imp, dmft.mu)
-        if dmft.solver_type == 'cc':
-            dmft.corr_ = cc_kernel (dmft.mf_)
-        elif dmft.solver_type == 'tdcc':
+        if dmft.solver_type in ('cc', 'cc_ao', 'tdcc', 'tdcc_ao'):
             dmft.corr_ = cc_kernel (dmft.mf_)
         elif dmft.solver_type == 'fci':
             assert (fci_)
@@ -399,21 +450,18 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, delta, \
 
         if dmft.solver_type == 'scf':
             gf_imp = _gf_imp (freqs, delta, dmft.mf_)
-        elif dmft.solver_type in ('cc', 'tdcc', 'fci'):
+        elif dmft.solver_type in ('cc', 'tdcc', 'cc_ao', 'tdcc_ao', 'fci'):
             gf_imp = _gf_imp (freqs, delta, dmft.mf_, dmft.corr_)
+    
         gf_imp = gf_imp[:nao,:nao,:]
 
-        print freqs
-        print gf_imp[0,0]
-        ddd
-        #plt.plot(freqs, -1./np.pi*gf_imp[0,0].imag)
-        #plt.show()
 
         
         nb = bath_e.shape[0]
         sgdum = np.zeros((nb+nao,nb+nao,nw))
         gf0_imp = get_gf(himp, sgdum, freqs, delta)
         gf0_imp = gf0_imp[:nao,:nao,:]
+
 
         sigma = get_sigma(gf0_imp, gf_imp)
 
@@ -437,7 +485,7 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, delta, \
         print 'norm_hyb = ', norm_hyb
         print '****'
         stdout.flush()
-        
+
         if (norm_hyb < conv_tol):
             dmft_conv = True
         cycle +=1
@@ -558,8 +606,12 @@ class DMFT:
                         self.mf_.mo_coeff, self.mf_.mo_energy)
         elif self.solver_type == 'cc':
             gf = cc_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
+        elif self.solver_type == 'cc_ao':
+            gf = cc_gf_ao (self.nao, freqs, delta, self.corr_, self.mf_.mo_coeff)
         elif self.solver_type == 'tdcc':
-            gf = tdcc_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
+            gf = tdcc_gf (freqs, delta, self.corr_, self.mf_.mo_coeff) 
+        elif self.solver_type == 'tdcc_ao':
+            gf = tdcc_gf_ao (self.nao, freqs, delta, self.corr_, self.mf_.mo_coeff)
         elif self.solver_type == 'fci':
             assert (fci_)
             gf = fci_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
@@ -1024,7 +1076,7 @@ if __name__ == '__main__':
     
 def test():
     U = 2.
-    dmft, w, delta = hub_1d (30, U, 5, solver_type='tdcc')
+    dmft, w, delta = hub_1d (2, U, 32, solver_type='cc_ao')
     #dmft, w, delta = hub_1d (2, U, 3, solver_type='cc')
     # dmft, w, delta = hub_2d (10, 10, U, 9, solver_type='scf')
 

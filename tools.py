@@ -1,3 +1,4 @@
+from numba import jit
 import numpy as np
 import scipy
 import scipy.linalg
@@ -21,6 +22,7 @@ def tb(n):
     h[-1,0]=1.
     return h
 
+@jit
 def linear_prediction(x, p, nfit):
     """
     Linear prediction following notation in: 
@@ -47,10 +49,14 @@ def linear_prediction(x, p, nfit):
         for n in range(nvalues-nfit,nvalues):
             r[j] += np.conj(x[n-j-1])*x[n]
 
-    a = - np.dot(scipy.linalg.pinv(R), r)
+    # I don't know why pinv does not work well here;
+    # apparently if there is a null space, it adds on arbitrary
+    # components of the null space, but pinv2 does not.
+    a = - np.dot(scipy.linalg.pinv2(R), r)
 
     return a
 
+@jit
 def generate_prediction(a, x, ntotal):
     """
     extrapolation formula
@@ -67,6 +73,7 @@ def generate_prediction(a, x, ntotal):
 
     return predicted_x
 
+@jit
 def generate_prediction2(a, x, ntotal):
     """
     extrapolation formula
@@ -82,18 +89,25 @@ def generate_prediction2(a, x, ntotal):
     for i in range(p):
         history_x[i] = predicted_x[nobs-i-1]
 
+    #print "a vector", a
     matA = np.zeros([p, p], np.complex128)
     matA[0]=-a
     matA[1:p,0:p-1]=np.eye(p-1)
 
     eig, rv = scipy.linalg.eig(matA)
-    lv = scipy.linalg.inv(rv)
+    lv = scipy.linalg.pinv(rv)
 
     # project out growing eigenvectors
+    total_eig = np.sum(np.abs(eig))
     for i, e in enumerate(eig):
-        if abs(e) > 1.:
+        if abs(e) > 1.+1.e-10:
+            print "projecting out eigenvalue", i, abs(e), e
+            #eig[i] = np.sign(eig[i])
             eig[i] = 0.
-            
+
+    total_peig = np.sum(np.abs(eig))
+    #print "Retained eig pct:", total_peig/total_eig+1.e-12
+    
     pmatA = np.dot(rv, np.dot(np.diag(eig), lv))
 
     for n in range(nobs, ntotal):        
@@ -101,7 +115,7 @@ def generate_prediction2(a, x, ntotal):
         predicted_x[n] = history_x[0]
     return predicted_x
 
-
+@jit
 def predict_gf(gf, ntotal):
     """
     GF prediction, following
@@ -118,7 +132,7 @@ def predict_gf(gf, ntotal):
     nobs = gf.shape[2]
     predicted_gf[:,:,:nobs] = gf
 
-    nfit = nobs/2
+    nfit = min(50, nobs / 2)
     for p in range(gf.shape[0]):
         for q in range(gf.shape[1]):
             
@@ -127,14 +141,20 @@ def predict_gf(gf, ntotal):
             predicted_gf[p,q,:] = predicted_x
     return predicted_gf
 
+@jit
 def get_gfw(gft, times, freqs, delta):
     """
     frequency transform of GF with Gaussian broadening delta
     """
+    print "lengths", len(times), len(freqs)
+    
     ti,tf=times[0],times[-1]
     gfw = np.zeros([gft.shape[0],gft.shape[1],len(freqs)], np.complex128)
     for iw, w in enumerate(freqs):
-        ftwts = 1./(tf-ti) * np.exp(1j*w*times) * np.exp(-.5*delta**2*(times**2))
+        # Gaussian broadening
+        #ftwts = (tf-ti)/len(times) * np.exp(1j*w*times) * np.exp(-.5*delta**2*(times**2))
+        # Lorentzian broadening
+        ftwts = (tf-ti)/len(times) * np.exp(1j*w*times) * np.exp(-delta*(times))
         for p in range(gft.shape[0]):
             for q in range(gft.shape[1]):
                 gfw[p,q,iw] = scipy.integrate.romb(ftwts * gft[p,q])
