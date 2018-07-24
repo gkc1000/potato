@@ -1,4 +1,3 @@
-import collections
 import numpy as np
 import scipy
 import gminres
@@ -6,9 +5,11 @@ import gminres
 import pyscf
 import pyscf.cc
 from pyscf.cc.eom_rccsd import amplitudes_to_vector_ip, amplitudes_to_vector_ea
+
 ###################
 # EA Greens       #
 ###################
+
 
 def greens_b_vector_ea_rhf(cc,p):
     nocc, nvir = cc.t1.shape
@@ -22,6 +23,7 @@ def greens_b_vector_ea_rhf(cc,p):
     else:
         vector1[ p-nocc ] = 1.0
     return amplitudes_to_vector_ea(vector1,vector2)
+
 
 def greens_e_vector_ea_rhf(cc,p):
     nocc, nvir = cc.t1.shape
@@ -49,6 +51,7 @@ def greens_e_vector_ea_rhf(cc,p):
 # IP Greens       #
 ###################
 
+
 def greens_b_vector_ip_rhf(cc,p):
     nocc, nvir = cc.t1.shape
     vector1 = np.zeros((nocc),dtype=complex)
@@ -59,6 +62,7 @@ def greens_b_vector_ip_rhf(cc,p):
         vector1 += cc.t1[:,p-nocc]
         vector2 += cc.t2[:,:,:,p-nocc]
     return amplitudes_to_vector_ip(vector1,vector2)
+
 
 def greens_e_vector_ip_rhf(cc,p):
     nocc, nvir = cc.t1.shape
@@ -80,14 +84,17 @@ def greens_e_vector_ip_rhf(cc,p):
 
     return amplitudes_to_vector_ip(vector1,vector2)
 
+
 def greens_func_multiply(ham,vector,linear_part,args=None):
     return np.array(ham(vector) + (linear_part)*vector)
+
 
 def initial_ip_guess(cc):
     nocc, nvir = cc.t1.shape
     vector1 = np.zeros((nocc),dtype=complex)
     vector2 = np.zeros((nocc,nocc,nvir),dtype=complex)
     return amplitudes_to_vector_ip(vector1,vector2)
+
 
 def initial_ea_guess(cc):
     nocc, nvir = cc.t1.shape
@@ -100,14 +107,15 @@ def ip_shape(cc):
     nocc, nvir = cc.t1.shape
     return nocc + nocc*nocc*nvir
 
+
 def ea_shape(cc):
     nocc, nvir = cc.t1.shape
     return nvir + nocc*nvir*nvir
 
+
 class greens_function:
     def __init__(self, verbose=0):
         self.verbose = verbose
-
 
     def td_ip_ao(self,cc,ps,times,mo_coeff,re_im="re",tol=1.e-5):
         """
