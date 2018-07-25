@@ -15,7 +15,7 @@ from pyscf.cc.eom_rccsd import amplitudes_to_vector_ip, amplitudes_to_vector_ea
 def greens_b_vector_ea_rhf(cc, p):
     nocc, nvir = cc.t1.shape
     ds_type = cc.t1.dtype
-    vector1 = np.zeros((nvir), dtype=ds_type)
+    vector1 = np.zeros((nvir,), dtype=ds_type)
     vector2 = np.zeros((nocc, nvir, nvir), dtype=ds_type)
     if p < nocc:
         # Changed both to minus
@@ -29,7 +29,7 @@ def greens_b_vector_ea_rhf(cc, p):
 def greens_e_vector_ea_rhf(cc, p):
     nocc, nvir = cc.t1.shape
     ds_type = cc.t1.dtype
-    vector1 = np.zeros((nvir), dtype=ds_type)
+    vector1 = np.zeros((nvir,), dtype=ds_type)
     vector2 = np.zeros((nocc, nvir, nvir), dtype=ds_type)
     if p < nocc:
         # Changed both to plus
@@ -56,7 +56,7 @@ def greens_e_vector_ea_rhf(cc, p):
 
 def greens_b_vector_ip_rhf(cc, p):
     nocc, nvir = cc.t1.shape
-    vector1 = np.zeros((nocc), dtype=complex)
+    vector1 = np.zeros((nocc,), dtype=complex)
     vector2 = np.zeros((nocc, nocc, nvir), dtype=complex)
     if p < nocc:
         vector1[p] = 1.0
@@ -68,7 +68,7 @@ def greens_b_vector_ip_rhf(cc, p):
 
 def greens_e_vector_ip_rhf(cc, p):
     nocc, nvir = cc.t1.shape
-    vector1 = np.zeros((nocc), dtype=complex)
+    vector1 = np.zeros((nocc,), dtype=complex)
     vector2 = np.zeros((nocc, nocc, nvir), dtype=complex)
     if p < nocc:
         vector1[p] = -1.0
@@ -88,19 +88,19 @@ def greens_e_vector_ip_rhf(cc, p):
 
 
 def greens_func_multiply(ham, vector, linear_part, args=None):
-    return np.array(ham(vector) + (linear_part) * vector)
+    return np.array(ham(vector) + linear_part * vector)
 
 
 def initial_ip_guess(cc):
     nocc, nvir = cc.t1.shape
-    vector1 = np.zeros((nocc), dtype=complex)
+    vector1 = np.zeros((nocc,), dtype=complex)
     vector2 = np.zeros((nocc, nocc, nvir), dtype=complex)
     return amplitudes_to_vector_ip(vector1, vector2)
 
 
 def initial_ea_guess(cc):
     nocc, nvir = cc.t1.shape
-    vector1 = np.zeros((nvir), dtype=complex)
+    vector1 = np.zeros((nvir,), dtype=complex)
     vector2 = np.zeros((nocc, nvir, nvir), dtype=complex)
     return amplitudes_to_vector_ea(vector1, vector2)
 
