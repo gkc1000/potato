@@ -1,6 +1,5 @@
 import numpy as np
 import scipy
-import gminres
 
 import pyscf
 import pyscf.cc
@@ -349,9 +348,7 @@ class greens_function:
                 def matr_multiply(vector, args=None):
                     return greens_func_multiply(eomip.matvec, vector, curr_omega - 1j * broadening)
 
-                solver = gminres.gMinRes(matr_multiply, b_vector_ao[:, p], x0, p0)
-                # solver = gminres.exactInverse(matr_multiply,b_vector,x0)
-                sol = solver.get_solution().reshape(-1)
+                sol = self.__solve_linear_problem__(matr_multiply, b_vector_ao[:, p], x0, p0)
                 x0 = sol
                 for iq, q in enumerate(ps):
                     gf_ao[ip, iq, iomega] = -np.dot(e_vector_ao[iq, :], sol)
@@ -383,9 +380,7 @@ class greens_function:
                 def matr_multiply(vector, args=None):
                     return greens_func_multiply(eomea.matvec, vector, -curr_omega - 1j * broadening)
 
-                solver = gminres.gMinRes(matr_multiply, b_vector_ao[:, q], x0, p0)
-                # solver = gminres.exactInverse(matr_multiply,b_vector,x0)
-                sol = solver.get_solution().reshape(-1)
+                sol = self.__solve_linear_problem__(matr_multiply, b_vector_ao[:, q], x0, p0)
                 x0 = sol
                 for ip, p in enumerate(ps):
                     gf_ao[ip, iq, iomega] = np.dot(e_vector_ao[ip], sol)
@@ -408,9 +403,7 @@ class greens_function:
                 def matr_multiply(vector, args=None):
                     return greens_func_multiply(eomip.matvec, vector, curr_omega - 1j * broadening)
 
-                solver = gminres.gMinRes(matr_multiply, b_vector, x0, p0)
-                # solver = gminres.exactInverse(matr_multiply,b_vector,x0)
-                sol = solver.get_solution().reshape(-1)
+                sol = self.__solve_linear_problem__(matr_multiply, b_vector, x0, p0)
                 x0 = sol
                 for iq, q in enumerate(qs):
                     gfvals[ip, iq, iomega] = -np.dot(e_vector[iq], sol)
@@ -435,9 +428,7 @@ class greens_function:
                 def matr_multiply(vector, args=None):
                     return greens_func_multiply(eomea.matvec, vector, -curr_omega - 1j * broadening)
 
-                solver = gminres.gMinRes(matr_multiply, b_vector, x0, p0)
-                # solver = gminres.exactInverse(matr_multiply,b_vector,x0)
-                sol = solver.get_solution().reshape(-1)
+                sol = self.__solve_linear_problem__(matr_multiply, b_vector, x0, p0)
                 x0 = sol
                 for ip, p in enumerate(ps):
                     gfvals[ip, iq, iomega] = np.dot(e_vector[ip], sol)
@@ -448,3 +439,28 @@ class greens_function:
 
     def solve_gf(self, cc, p, q, omega_list, broadening):
         return self.solve_ip(cc, p, q, omega_list, broadening), self.solve_ea(cc, p, q, omega_list, broadening)
+
+    def __solve_linear_problem__(self, matr_multiply, b_vector, x0, p0):
+        self.l("  Solving linear problem ...")
+        try:
+            import gminres
+            driver = gminres.gMinRes(matr_multiply, b_vector, x0, p0)
+            return driver.get_solution().reshape(-1)
+
+        except ImportError:
+            self.l("  gminres import failed, trying scipy ...")
+            # TODO: p0 is not used here, whatever it is
+            import scipy.sparse.linalg as spla
+            size = len(b_vector)
+            Ax = spla.LinearOperator((size, size), matr_multiply)
+            result, info = spla.gmres(Ax, b_vector, x0=x0, callback=self.__spla_callback__)
+            if info != 0:
+                raise RuntimeError("Error solving linear problem: info={:d}".format(info))
+            return result
+
+    def l(self, x):
+        if self.verbose > 0:
+            print(x)
+
+    def __spla_callback__(self, r):
+        self.l("    res = {:.3e}".format(r))
