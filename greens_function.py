@@ -86,8 +86,8 @@ def greens_e_vector_ip_rhf(cc, p):
     return amplitudes_to_vector_ip(vector1, vector2)
 
 
-def greens_func_multiply(ham, vector, linear_part, args=None):
-    return np.array(ham(vector) + linear_part * vector)
+def greens_func_multiply(ham, vector, linear_part, **kwargs):
+    return np.array(ham(vector, **kwargs) + linear_part * vector)
 
 
 def initial_ip_guess(cc):
@@ -162,12 +162,13 @@ class greens_function:
         # initialize loop variables
         gf_ao = np.zeros((len(ps), len(ps), len(times)), dtype=dtype)
         eomip = pyscf.cc.eom_rccsd.EOMIP(cc)
+        eomip_imds = eomip.make_imds()
         ti = times[0]
         tf = times[-1]
 
         def matr_multiply(t, vector):
             # note: t is a dummy time argument, H is time-independent
-            return tfac * np.array(eomip.matvec(vector))
+            return tfac * np.array(eomip.matvec(vector, imds=eomip_imds))
 
         for ip, p in enumerate(ps):
             solp = scipy.integrate.solve_ivp(matr_multiply, (ti, tf),
@@ -212,12 +213,13 @@ class greens_function:
         # initialize loop variables
         gf_ao = np.zeros((len(ps), len(ps), len(times)), dtype=dtype)
         eomea = pyscf.cc.eom_rccsd.EOMEA(cc)
+        eomea_imds = eomea.make_imds()
         ti = times[0]
         tf = times[-1]
 
         def matr_multiply(t, vector):
             # note: t is a dummy time argument, H is time-independent
-            return tfac * np.array(eomea.matvec(vector))
+            return tfac * np.array(eomea.matvec(vector, imds=eomea_imds))
 
         for ip, p in enumerate(ps):
             solp = scipy.integrate.solve_ivp(matr_multiply, (ti, tf),
@@ -255,6 +257,7 @@ class greens_function:
             raise RuntimeError
 
         eomip = pyscf.cc.eom_rccsd.EOMIP(cc)
+        eomip_imds = eomip.make_imds()
         ti = times[0]
         tf = times[-1]
 
@@ -269,7 +272,7 @@ class greens_function:
 
             def matr_multiply(t, vector, args=None):
                 # note: t is a dummy time argument, H is time-independent
-                res = tfac * np.array(eomip.matvec(vector))
+                res = tfac * np.array(eomip.matvec(vector, imds=eomip_imds))
                 return res
 
             solp = scipy.integrate.solve_ivp(matr_multiply, (ti, tf),
@@ -301,6 +304,7 @@ class greens_function:
         ti = times[0]
         tf = times[-1]
         eomea = pyscf.cc.eom_rccsd.EOMEA(cc)
+        eomea_imds = eomea.make_imds()
 
         e_vector = list()
         for p in ps:
@@ -312,7 +316,7 @@ class greens_function:
 
             def matr_multiply(t, vector, args=None):
                 # t is a dummy time argument
-                res = tfac * np.array(eomea.matvec(vector))
+                res = tfac * np.array(eomea.matvec(vector, imds=eomea_imds))
                 return res
 
             solq = scipy.integrate.solve_ivp(matr_multiply, (ti, tf),
@@ -324,6 +328,7 @@ class greens_function:
 
     def solve_ip_ao(self, cc, ps, omega_list, mo_coeff, broadening):
         eomip = pyscf.cc.eom_rccsd.EOMIP(cc)
+        eomip_imds = eomip.make_imds()
         # GKC: Why is this is the initial guess?
         x0 = initial_ip_guess(cc)
         p0 = 0.0 * x0 + 1.0
@@ -346,7 +351,7 @@ class greens_function:
                 curr_omega = omega_list[iomega]
 
                 def matr_multiply(vector, args=None):
-                    return greens_func_multiply(eomip.matvec, vector, curr_omega - 1j * broadening)
+                    return greens_func_multiply(eomip.matvec, vector, curr_omega - 1j * broadening, imds=eomip_imds)
 
                 sol = self.__solve_linear_problem__(matr_multiply, b_vector_ao[:, p], x0, p0)
                 x0 = sol
@@ -356,6 +361,7 @@ class greens_function:
 
     def solve_ea_ao(self, cc, ps, omega_list, mo_coeff, broadening):
         eomea = pyscf.cc.eom_rccsd.EOMEA(cc)
+        eomea_imds = eomea.make_imds()
         # GKC: Why is this is the initial guess?
         x0 = initial_ea_guess(cc)
         p0 = 0.0 * x0 + 1.0
@@ -378,7 +384,7 @@ class greens_function:
                 curr_omega = omega_list[iomega]
 
                 def matr_multiply(vector, args=None):
-                    return greens_func_multiply(eomea.matvec, vector, -curr_omega - 1j * broadening)
+                    return greens_func_multiply(eomea.matvec, vector, -curr_omega - 1j * broadening, imds=eomea_imds)
 
                 sol = self.__solve_linear_problem__(matr_multiply, b_vector_ao[:, q], x0, p0)
                 x0 = sol
@@ -389,6 +395,7 @@ class greens_function:
 
     def solve_ip(self, cc, ps, qs, omega_list, broadening):
         eomip = pyscf.cc.eom_rccsd.EOMIP(cc)
+        eomip_imds = eomip.make_imds()
         x0 = initial_ip_guess(cc)
         p0 = 0.0 * x0 + 1.0
         e_vector = list()
@@ -401,7 +408,7 @@ class greens_function:
                 curr_omega = omega_list[iomega]
 
                 def matr_multiply(vector, args=None):
-                    return greens_func_multiply(eomip.matvec, vector, curr_omega - 1j * broadening)
+                    return greens_func_multiply(eomip.matvec, vector, curr_omega - 1j * broadening, imds=eomip_imds)
 
                 sol = self.__solve_linear_problem__(matr_multiply, b_vector, x0, p0)
                 x0 = sol
@@ -414,6 +421,7 @@ class greens_function:
 
     def solve_ea(self, cc, ps, qs, omega_list, broadening):
         eomea = pyscf.cc.eom_rccsd.EOMEA(cc)
+        eomea_imds = eomea.make_imds()
         x0 = initial_ea_guess(cc)
         p0 = 0.0 * x0 + 1.0
         e_vector = list()
@@ -426,7 +434,7 @@ class greens_function:
                 curr_omega = omega_list[iomega]
 
                 def matr_multiply(vector, args=None):
-                    return greens_func_multiply(eomea.matvec, vector, -curr_omega - 1j * broadening)
+                    return greens_func_multiply(eomea.matvec, vector, -curr_omega - 1j * broadening, imds=eomea_imds)
 
                 sol = self.__solve_linear_problem__(matr_multiply, b_vector, x0, p0)
                 x0 = sol
