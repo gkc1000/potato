@@ -11,45 +11,66 @@ from pyscf.cc.eom_rccsd import amplitudes_to_vector_ip, amplitudes_to_vector_ea
 ###################
 
 
-def greens_b_amplitudes_ea_rhf(t1, t2, p):
+def greens_b_singles_ea_rhf(t1, p):
     nocc, nvir = t1.shape
     ds_type = t1.dtype
     if p < nocc:
-        return -t1[p, :], -t2[p, :, :, :]
+        return -t1[p, :]
     else:
-        vector1 = np.zeros((nvir,), dtype=ds_type)
-        vector2 = np.zeros((nocc, nvir, nvir), dtype=ds_type)
-        vector1[p - nocc] = 1.0
-        return vector1, vector2
+        result = np.zeros((nvir,), dtype=ds_type)
+        result[p - nocc] = 1.0
+        return result
+
+
+def greens_b_doubles_ea_rhf(t2, p):
+    nocc, _, nvir, _ = t2.shape
+    ds_type = t2.dtype
+    if p < nocc:
+        return -t2[p, :, :, :]
+    else:
+        return np.zeros((nocc, nvir, nvir), dtype=ds_type)
 
 
 def greens_b_vector_ea_rhf(cc, p):
-    return amplitudes_to_vector_ea(*greens_b_amplitudes_ea_rhf(cc.t1, cc.t2, p))
+    return amplitudes_to_vector_ea(
+        greens_b_singles_ea_rhf(cc.t1, p),
+        greens_b_doubles_ea_rhf(cc.t2, p),
+    )
 
 
-def greens_e_amplitudes_ea_rhf(t1, t2, l1, l2, p):
+def greens_e_singles_ea_rhf(t1, t2, l1, l2, p):
     nocc, nvir = t1.shape
     ds_type = t1.dtype
     if p < nocc:
-        return l1[p, :], 2 * l2[p, :, :, :] - l2[:, p, :, :]
+        return l1[p, :]
     else:
-        vector1 = np.zeros((nvir,), dtype=ds_type)
-        vector2 = np.zeros((nocc, nvir, nvir), dtype=ds_type)
-        vector1[p - nocc] = -1.0
-        vector1 += np.einsum('ia,i->a', l1, t1[:, p - nocc])
-        vector1 += 2 * np.einsum('klca,klc->a', l2, t2[:, :, :, p - nocc])
-        vector1 -= np.einsum('klca,lkc->a', l2, t2[:, :, :, p - nocc])
+        result = np.zeros((nvir,), dtype=ds_type)
+        result[p - nocc] = -1.0
+        result += np.einsum('ia,i->a', l1, t1[:, p - nocc])
+        result += 2 * np.einsum('klca,klc->a', l2, t2[:, :, :, p - nocc])
+        result -= np.einsum('klca,lkc->a', l2, t2[:, :, :, p - nocc])
+        return result
 
-        vector2[:, p - nocc, :] += -2. * l1
-        vector2[:, :, p - nocc] += l1
-        vector2 += 2 * np.einsum('k,jkba->jab', t1[:, p - nocc], l2)
-        vector2 -= np.einsum('k,jkab->jab', t1[:, p - nocc], l2)
 
-        return vector1, vector2
+def greens_e_doubles_ea_rhf(t1, l1, l2, p):
+    nocc, nvir = t1.shape
+    ds_type = t1.dtype
+    if p < nocc:
+        return 2 * l2[p, :, :, :] - l2[:, p, :, :]
+    else:
+        result = np.zeros((nocc, nvir, nvir), dtype=ds_type)
+        result[:, p - nocc, :] += -2. * l1
+        result[:, :, p - nocc] += l1
+        result += 2 * np.einsum('k,jkba->jab', t1[:, p - nocc], l2)
+        result -= np.einsum('k,jkab->jab', t1[:, p - nocc], l2)
+        return result
 
 
 def greens_e_vector_ea_rhf(cc, p):
-    return amplitudes_to_vector_ea(*greens_e_amplitudes_ea_rhf(cc.t1, cc.t2, cc.l1, cc.l2, p))
+    return amplitudes_to_vector_ea(
+        greens_e_singles_ea_rhf(cc.t1, cc.t2, cc.l1, cc.l2, p),
+        greens_e_doubles_ea_rhf(cc.t1, cc.l1, cc.l2, p),
+    )
 
 
 ###################
@@ -57,45 +78,66 @@ def greens_e_vector_ea_rhf(cc, p):
 ###################
 
 
-def greens_b_amplitudes_ip_rhf(t1, t2, p):
+def greens_b_singles_ip_rhf(t1, p):
     nocc, nvir = t1.shape
     ds_type = t1.dtype
     if p < nocc:
-        vector1 = np.zeros((nocc,), dtype=ds_type)
-        vector2 = np.zeros((nocc, nocc, nvir), dtype=ds_type)
-        vector1[p] = 1.0
-        return vector1, vector2
+        result = np.zeros((nocc,), dtype=ds_type)
+        result[p] = 1.0
+        return result
     else:
-        return t1[:, p - nocc], t2[:, :, :, p - nocc]
+        return t1[:, p - nocc]
+
+
+def greens_b_doubles_ip_rhf(t2, p):
+    nocc, _, nvir, _ = t2.shape
+    ds_type = t2.dtype
+    if p < nocc:
+        return np.zeros((nocc, nocc, nvir), dtype=ds_type)
+    else:
+        return t2[:, :, :, p - nocc]
 
 
 def greens_b_vector_ip_rhf(cc, p):
-    return amplitudes_to_vector_ip(*greens_b_amplitudes_ip_rhf(cc.t1, cc.t2, p))
+    return amplitudes_to_vector_ip(
+        greens_b_singles_ip_rhf(cc.t1, p),
+        greens_b_doubles_ip_rhf(cc.t2, p),
+    )
 
 
-def greens_e_amplitudes_ip_rhf(t1, t2, l1, l2, p):
+def greens_e_singles_ip_rhf(t1, t2, l1, l2, p):
     nocc, nvir = t1.shape
     ds_type = t1.dtype
     if p < nocc:
-        vector1 = np.zeros((nocc,), dtype=ds_type)
-        vector2 = np.zeros((nocc, nocc, nvir), dtype=ds_type)
-        vector1[p] = -1.0
-        vector1 += np.einsum('ia,a->i', l1, t1[p, :])
-        vector1 += 2 * np.einsum('ilcd,lcd->i', l2, t2[p, :, :, :])
-        vector1 -= np.einsum('ilcd,ldc->i', l2, t2[p, :, :, :])
-
-        vector2[p, :, :] += -2. * l1
-        vector2[:, p, :] += l1
-        vector2 += 2 * np.einsum('c,ijcb->ijb', t1[p, :], l2)
-        vector2 -= np.einsum('c,jicb->ijb', t1[p, :], l2)
-
-        return vector1, vector2
+        result = np.zeros((nocc,), dtype=ds_type)
+        result[p] = -1.0
+        result += np.einsum('ia,a->i', l1, t1[p, :])
+        result += 2 * np.einsum('ilcd,lcd->i', l2, t2[p, :, :, :])
+        result -= np.einsum('ilcd,ldc->i', l2, t2[p, :, :, :])
+        return result
     else:
-        return -l1[:, p - nocc], -2 * l2[:, :, p - nocc, :] + l2[:, :, :, p - nocc]
+        return -l1[:, p - nocc]
+
+
+def greens_e_doubles_ip_rhf(t1, l1, l2, p):
+    nocc, nvir = t1.shape
+    ds_type = t1.dtype
+    if p < nocc:
+        result = np.zeros((nocc, nocc, nvir), dtype=ds_type)
+        result[p, :, :] += -2. * l1
+        result[:, p, :] += l1
+        result += 2 * np.einsum('c,ijcb->ijb', t1[p, :], l2)
+        result -= np.einsum('c,jicb->ijb', t1[p, :], l2)
+        return result
+    else:
+        return -2 * l2[:, :, p - nocc, :] + l2[:, :, :, p - nocc]
 
 
 def greens_e_vector_ip_rhf(cc, p):
-    return amplitudes_to_vector_ip(*greens_e_amplitudes_ip_rhf(cc.t1, cc.t2, cc.l1, cc.l2, p))
+    return amplitudes_to_vector_ip(
+        greens_e_singles_ip_rhf(cc.t1, cc.t2, cc.l1, cc.l2, p),
+        greens_e_doubles_ip_rhf(cc.t1, cc.l1, cc.l2, p),
+    )
 
 
 def greens_func_multiply(ham, vector, linear_part, **kwargs):
