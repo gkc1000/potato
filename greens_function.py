@@ -11,41 +11,45 @@ from pyscf.cc.eom_rccsd import amplitudes_to_vector_ip, amplitudes_to_vector_ea
 ###################
 
 
-def greens_b_vector_ea_rhf(cc, p):
-    nocc, nvir = cc.t1.shape
-    ds_type = cc.t1.dtype
-    vector1 = np.zeros((nvir,), dtype=ds_type)
-    vector2 = np.zeros((nocc, nvir, nvir), dtype=ds_type)
+def greens_b_amplitudes_ea_rhf(t1, t2, p):
+    nocc, nvir = t1.shape
+    ds_type = t1.dtype
     if p < nocc:
-        # Changed both to minus
-        vector1 += -cc.t1[p, :]
-        vector2 += -cc.t2[p, :, :, :]
+        return -t1[p, :], -t2[p, :, :, :]
     else:
+        vector1 = np.zeros((nvir,), dtype=ds_type)
+        vector2 = np.zeros((nocc, nvir, nvir), dtype=ds_type)
         vector1[p - nocc] = 1.0
-    return amplitudes_to_vector_ea(vector1, vector2)
+        return vector1, vector2
+
+
+def greens_b_vector_ea_rhf(cc, p):
+    return amplitudes_to_vector_ea(*greens_b_amplitudes_ea_rhf(cc.t1, cc.t2, p))
+
+
+def greens_e_amplitudes_ea_rhf(t1, t2, l1, l2, p):
+    nocc, nvir = t1.shape
+    ds_type = t1.dtype
+    if p < nocc:
+        return l1[p, :], 2 * l2[p, :, :, :] - l2[:, p, :, :]
+    else:
+        vector1 = np.zeros((nvir,), dtype=ds_type)
+        vector2 = np.zeros((nocc, nvir, nvir), dtype=ds_type)
+        vector1[p - nocc] = -1.0
+        vector1 += np.einsum('ia,i->a', l1, t1[:, p - nocc])
+        vector1 += 2 * np.einsum('klca,klc->a', l2, t2[:, :, :, p - nocc])
+        vector1 -= np.einsum('klca,lkc->a', l2, t2[:, :, :, p - nocc])
+
+        vector2[:, p - nocc, :] += -2. * l1
+        vector2[:, :, p - nocc] += l1
+        vector2 += 2 * np.einsum('k,jkba->jab', t1[:, p - nocc], l2)
+        vector2 -= np.einsum('k,jkab->jab', t1[:, p - nocc], l2)
+
+        return vector1, vector2
 
 
 def greens_e_vector_ea_rhf(cc, p):
-    nocc, nvir = cc.t1.shape
-    ds_type = cc.t1.dtype
-    vector1 = np.zeros((nvir,), dtype=ds_type)
-    vector2 = np.zeros((nocc, nvir, nvir), dtype=ds_type)
-    if p < nocc:
-        # Changed both to plus
-        vector1 += cc.l1[p, :]
-        vector2 += (2 * cc.l2[p, :, :, :] - cc.l2[:, p, :, :])
-        pass
-    else:
-        vector1[p - nocc] = -1.0
-        vector1 += np.einsum('ia,i->a', cc.l1, cc.t1[:, p - nocc])
-        vector1 += 2 * np.einsum('klca,klc->a', cc.l2, cc.t2[:, :, :, p - nocc])
-        vector1 -= np.einsum('klca,lkc->a', cc.l2, cc.t2[:, :, :, p - nocc])
-
-        vector2[:, p - nocc, :] += -2. * cc.l1
-        vector2[:, :, p - nocc] += cc.l1
-        vector2 += 2 * np.einsum('k,jkba->jab', cc.t1[:, p - nocc], cc.l2)
-        vector2 -= np.einsum('k,jkab->jab', cc.t1[:, p - nocc], cc.l2)
-    return amplitudes_to_vector_ea(vector1, vector2)
+    return amplitudes_to_vector_ea(*greens_e_amplitudes_ea_rhf(cc.t1, cc.t2, cc.l1, cc.l2, p))
 
 
 ###################
@@ -53,37 +57,45 @@ def greens_e_vector_ea_rhf(cc, p):
 ###################
 
 
-def greens_b_vector_ip_rhf(cc, p):
-    nocc, nvir = cc.t1.shape
-    vector1 = np.zeros((nocc,), dtype=complex)
-    vector2 = np.zeros((nocc, nocc, nvir), dtype=complex)
+def greens_b_amplitudes_ip_rhf(t1, t2, p):
+    nocc, nvir = t1.shape
+    ds_type = t1.dtype
     if p < nocc:
+        vector1 = np.zeros((nocc,), dtype=ds_type)
+        vector2 = np.zeros((nocc, nocc, nvir), dtype=ds_type)
         vector1[p] = 1.0
+        return vector1, vector2
     else:
-        vector1 += cc.t1[:, p - nocc]
-        vector2 += cc.t2[:, :, :, p - nocc]
-    return amplitudes_to_vector_ip(vector1, vector2)
+        return t1[:, p - nocc], t2[:, :, :, p - nocc]
+
+
+def greens_b_vector_ip_rhf(cc, p):
+    return amplitudes_to_vector_ip(*greens_b_amplitudes_ip_rhf(cc.t1, cc.t2, p))
+
+
+def greens_e_amplitudes_ip_rhf(t1, t2, l1, l2, p):
+    nocc, nvir = t1.shape
+    ds_type = t1.dtype
+    if p < nocc:
+        vector1 = np.zeros((nocc,), dtype=ds_type)
+        vector2 = np.zeros((nocc, nocc, nvir), dtype=ds_type)
+        vector1[p] = -1.0
+        vector1 += np.einsum('ia,a->i', l1, t1[p, :])
+        vector1 += 2 * np.einsum('ilcd,lcd->i', l2, t2[p, :, :, :])
+        vector1 -= np.einsum('ilcd,ldc->i', l2, t2[p, :, :, :])
+
+        vector2[p, :, :] += -2. * l1
+        vector2[:, p, :] += l1
+        vector2 += 2 * np.einsum('c,ijcb->ijb', t1[p, :], l2)
+        vector2 -= np.einsum('c,jicb->ijb', t1[p, :], l2)
+
+        return vector1, vector2
+    else:
+        return -l1[:, p - nocc], -2 * l2[:, :, p - nocc, :] + l2[:, :, :, p - nocc]
 
 
 def greens_e_vector_ip_rhf(cc, p):
-    nocc, nvir = cc.t1.shape
-    vector1 = np.zeros((nocc,), dtype=complex)
-    vector2 = np.zeros((nocc, nocc, nvir), dtype=complex)
-    if p < nocc:
-        vector1[p] = -1.0
-        vector1 += np.einsum('ia,a->i', cc.l1, cc.t1[p, :])
-        vector1 += 2 * np.einsum('ilcd,lcd->i', cc.l2, cc.t2[p, :, :, :])
-        vector1 -= np.einsum('ilcd,ldc->i', cc.l2, cc.t2[p, :, :, :])
-
-        vector2[p, :, :] += -2. * cc.l1
-        vector2[:, p, :] += cc.l1
-        vector2 += 2 * np.einsum('c,ijcb->ijb', cc.t1[p, :], cc.l2)
-        vector2 -= np.einsum('c,jicb->ijb', cc.t1[p, :], cc.l2)
-    else:
-        vector1 += -cc.l1[:, p - nocc]
-        vector2 += -2 * cc.l2[:, :, p - nocc, :] + cc.l2[:, :, :, p - nocc]
-
-    return amplitudes_to_vector_ip(vector1, vector2)
+    return amplitudes_to_vector_ip(*greens_e_amplitudes_ip_rhf(cc.t1, cc.t2, cc.l1, cc.l2, p))
 
 
 def greens_func_multiply(ham, vector, linear_part, **kwargs):
