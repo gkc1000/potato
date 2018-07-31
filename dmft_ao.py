@@ -21,7 +21,7 @@ import pyscf.ao2mo as ao2mo
 import greens_function
 import numint_
 
-import tools
+#import tools
 from matplotlib import pyplot as plt
 
 fci_ = False
@@ -854,8 +854,13 @@ def hub_1d (nx, U, nw, fill=1., chkf=None, \
     #print "DELTA IS", delta
     #freqs, wts = _get_linear_freqs(wl, wh, nw)
     freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
-    dmft.kernel_nopt (fill, mu0, freqs, wts, delta, \
-                      max_cycle, conv_tol, dmpf=0.75)
+    if np.allclose(fill, 1.0):
+        mu0 = U/2.
+        dmft.kernel(mu0, freqs, wts, delta, \
+                    max_cycle, conv_tol, dmpf=0.75)
+    else:
+        dmft.kernel_nopt (fill, mu0, freqs, wts, delta, \
+                          max_cycle, conv_tol, dmpf=0.75)
     return dmft, freqs, delta
 
 def hub_2d (nx, ny, U, nw, fill=1., chkf=None, \
@@ -1071,12 +1076,9 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, bas=None, fill=1., chkf=None, \
     return dmft, freqs, delta
 
 
-if __name__ == '__main__':
-    test()
-    
 def test():
     U = 2.
-    dmft, w, delta = hub_1d (2, U, 32, solver_type='cc_ao')
+    dmft, w, delta = hub_1d (100, U, 19, solver_type='cc_ao')
     #dmft, w, delta = hub_1d (2, U, 3, solver_type='cc')
     # dmft, w, delta = hub_2d (10, 10, U, 9, solver_type='scf')
 
@@ -1084,6 +1086,8 @@ def test():
     #                               solver_type='scf')
     # dmft, w, delta = hub_cell_2d (10, 10, 2, 2, U, 7, \
     #                               solver_type='scf')
+
+    return -1
 
     try:
         import matplotlib.pyplot as plt
@@ -1134,3 +1138,6 @@ def test():
     print '----\n'
 
 
+if __name__ == '__main__':
+    test()
+    

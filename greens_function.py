@@ -1,5 +1,6 @@
 import numpy as np
 import scipy
+import gmres
 
 import pyscf
 import pyscf.cc
@@ -383,9 +384,7 @@ class greens_function:
     def solve_ip_ao(self, cc, ps, omega_list, mo_coeff, broadening):
         eomip = pyscf.cc.eom_rccsd.EOMIP(cc)
         eomip_imds = eomip.make_imds()
-        # GKC: Why is this is the initial guess?
-        x0 = initial_ip_guess(cc)
-        p0 = 0.0 * x0 + 1.0
+        diag = eomip.get_diag() 
 
         # set initial bra/ket
         nmo = mo_coeff.shape[1]
@@ -407,7 +406,10 @@ class greens_function:
                 def matr_multiply(vector, args=None):
                     return greens_func_multiply(eomip.matvec, vector, curr_omega - 1j * broadening, imds=eomip_imds)
 
-                sol = self.__solve_linear_problem__(matr_multiply, b_vector_ao[:, p], x0, p0)
+                diag_w = diag + curr_omega-1j*broadening
+                x0 = b_vector_ao[:,p]/diag_w
+                solver = gmres.GMRES(matr_multiply, b_vector_ao[:,p], x0, diag_w)
+                sol = solver.solve().reshape(-1)
                 x0 = sol
                 for iq, q in enumerate(ps):
                     gf_ao[ip, iq, iomega] = -np.dot(e_vector_ao[iq, :], sol)
@@ -416,9 +418,7 @@ class greens_function:
     def solve_ea_ao(self, cc, ps, omega_list, mo_coeff, broadening):
         eomea = pyscf.cc.eom_rccsd.EOMEA(cc)
         eomea_imds = eomea.make_imds()
-        # GKC: Why is this is the initial guess?
-        x0 = initial_ea_guess(cc)
-        p0 = 0.0 * x0 + 1.0
+        diag = eomea.get_diag() 
 
         # set initial bra/ket
         nmo = mo_coeff.shape[1]
@@ -440,7 +440,10 @@ class greens_function:
                 def matr_multiply(vector, args=None):
                     return greens_func_multiply(eomea.matvec, vector, -curr_omega - 1j * broadening, imds=eomea_imds)
 
-                sol = self.__solve_linear_problem__(matr_multiply, b_vector_ao[:, q], x0, p0)
+                diag_w = diag + (-curr_omega-1j*broadening)
+                x0 = b_vector_ao[:,q]/diag_w
+                solver = gmres.GMRES(matr_multiply, b_vector_ao[:,q], x0, diag_w)
+                sol = solver.solve().reshape(-1)
                 x0 = sol
                 for ip, p in enumerate(ps):
                     gf_ao[ip, iq, iomega] = np.dot(e_vector_ao[ip], sol)
@@ -450,8 +453,7 @@ class greens_function:
     def solve_ip(self, cc, ps, qs, omega_list, broadening):
         eomip = pyscf.cc.eom_rccsd.EOMIP(cc)
         eomip_imds = eomip.make_imds()
-        x0 = initial_ip_guess(cc)
-        p0 = 0.0 * x0 + 1.0
+        diag = eomip.get_diag() 
         e_vector = list()
         for q in qs:
             e_vector.append(greens_e_vector_ip_rhf(cc, q))
@@ -464,7 +466,10 @@ class greens_function:
                 def matr_multiply(vector, args=None):
                     return greens_func_multiply(eomip.matvec, vector, curr_omega - 1j * broadening, imds=eomip_imds)
 
-                sol = self.__solve_linear_problem__(matr_multiply, b_vector, x0, p0)
+                diag_w = diag + curr_omega-1j*broadening
+                x0 = b_vector[:,p]/diag_w
+                solver = gmres.GMRES(matr_multiply, b_vector[:,p], x0, diag_w)
+                sol = solver.solve().reshape(-1)
                 x0 = sol
                 for iq, q in enumerate(qs):
                     gfvals[ip, iq, iomega] = -np.dot(e_vector[iq], sol)
@@ -476,8 +481,7 @@ class greens_function:
     def solve_ea(self, cc, ps, qs, omega_list, broadening):
         eomea = pyscf.cc.eom_rccsd.EOMEA(cc)
         eomea_imds = eomea.make_imds()
-        x0 = initial_ea_guess(cc)
-        p0 = 0.0 * x0 + 1.0
+        diag = eomea.get_diag() 
         e_vector = list()
         for p in ps:
             e_vector.append(greens_e_vector_ea_rhf(cc, p))
@@ -490,7 +494,10 @@ class greens_function:
                 def matr_multiply(vector, args=None):
                     return greens_func_multiply(eomea.matvec, vector, -curr_omega - 1j * broadening, imds=eomea_imds)
 
-                sol = self.__solve_linear_problem__(matr_multiply, b_vector, x0, p0)
+                diag_w = diag + (-curr_omega-1j*broadening)
+                x0 = b_vector[:,q]/diag_w
+                solver = gmres.GMRES(matr_multiply, b_vector[:,q], x0, diag_w)
+                sol = solver.solve().reshape(-1)
                 x0 = sol
                 for ip, p in enumerate(ps):
                     gfvals[ip, iq, iomega] = np.dot(e_vector[ip], sol)
@@ -502,27 +509,3 @@ class greens_function:
     def solve_gf(self, cc, p, q, omega_list, broadening):
         return self.solve_ip(cc, p, q, omega_list, broadening), self.solve_ea(cc, p, q, omega_list, broadening)
 
-    def __solve_linear_problem__(self, matr_multiply, b_vector, x0, p0):
-        self.l("  Solving linear problem ...")
-        try:
-            import gminres
-            driver = gminres.gMinRes(matr_multiply, b_vector, x0, p0)
-            return driver.get_solution().reshape(-1)
-
-        except ImportError:
-            self.l("  gminres import failed, trying scipy ...")
-            # TODO: p0 is not used here, whatever it is
-            import scipy.sparse.linalg as spla
-            size = len(b_vector)
-            Ax = spla.LinearOperator((size, size), matr_multiply)
-            result, info = spla.gmres(Ax, b_vector, x0=x0, callback=self.__spla_callback__)
-            if info != 0:
-                raise RuntimeError("Error solving linear problem: info={:d}".format(info))
-            return result
-
-    def l(self, x):
-        if self.verbose > 0:
-            print(x)
-
-    def __spla_callback__(self, r):
-        self.l("    res = {:.3e}".format(r))
