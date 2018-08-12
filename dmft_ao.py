@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+import os
 from sys import stdout
 
 import numpy as np
@@ -29,6 +30,11 @@ try:
     import PyCheMPS2
     import ctypes
     fci_ = True
+except:
+    pass
+
+try:
+    from pyscf.cornell_shci import shci
 except:
     pass
 
@@ -184,6 +190,60 @@ def fci_kernel (mf_):
 
     fcisol = FCIsol(HamCheMPS2, theFCI, GSvector, EnergyCheMPS2)
     return fcisol
+
+def shci_kernel (mf_):
+    norb = mf_.mo_coeff.shape[0]
+    h0   = 0.
+    h1t  = np.dot(mf_.mo_coeff.T, \
+                  np.dot(mf_.get_hcore(), mf_.mo_coeff))
+    erit = ao2mo.incore.full(mf_._eri, mf_.mo_coeff)
+
+    nel = np.count_nonzero(mf_.mo_occ)*2
+    assert( nel % 2 == 0 )
+    Nel_up       = nel / 2
+    Nel_down     = nel / 2
+
+    shcisol = shci.SHCI()
+    shcisol.kernel(h1t, erit, norb, (Nel_up, Nel_down))
+    shcisol.args = (h1t, erit, norb, (Nel_up, Nel_down))
+    return shcisol
+
+def shci_gf (freqs, delta, shcisol, mo_coeff):
+    n  = mo_coeff.shape[0]
+    nw = len(freqs)
+    gf = np.zeros([n, n, nw], np.complex128)
+
+    for iw, w in enumerate(freqs):
+        if np.iscomplex(w):
+            wr = w.real
+            wi = w.imag
+        else:
+            wr = w
+            wi = 0.
+        shcisol.config['get_green'] = True
+        shcisol.config['w_green'] = wr
+        shcisol.config['n_green'] = wi
+        # Set advanced for G-
+        #shcisol.config['advanced'] = True
+
+# To get the Green's function
+        shcisol.kernel(*shcisol.args)
+
+        gf_spin_orb = _read_shci_gf(shcisol, n)
+        gf[:,:,iw] = np.dot(mo_coeff, np.dot(gf_spin_orb[:n,:n], mo_coeff.T))
+    return gf
+
+def _read_shci_gf(shcisol, n):
+    w_green = shcisol.config['w_green']
+    n_green = shcisol.config['n_green']
+    gf_file = 'green_%.2e_%.2ei.csv' % (w_green, n_green)
+    i, j, val = np.loadtxt(os.path.join(shcisol.runtimedir, gf_file),
+                           dtype=np.dtype('i,i,D'), delimiter=',',
+                           skiprows=1, unpack=True)
+    n_spin_orb = n * 2
+    gf = np.zeros((n_spin_orb, n_spin_orb), np.complex128)
+    gf[i,j] = val
+    return gf
 
 def mf_gf (freqs, delta, mo_coeff, mo_energy):
     nw = len(freqs)
@@ -435,7 +495,9 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, delta, \
         elif dmft.solver_type == 'fci':
             assert (fci_)
             return fci_gf (freqs, delta, corr_, mf_.mo_coeff)
-    
+        elif dmft.solver_type == 'shci':
+            return shci_gf (freqs, delta, corr_, mf_.mo_coeff)
+
     while not dmft_conv and cycle < max(1, max_cycle):
         hyb_last = hyb
         bath_v, bath_e = get_bath(hyb, freqs, wts)
@@ -447,16 +509,17 @@ def kernel (dmft, hcore_kpts, eri_cell, freqs, wts, delta, \
         elif dmft.solver_type == 'fci':
             assert (fci_)
             dmft.corr_ = fci_kernel (dmft.mf_)
+        elif dmft.solver_type == 'shci':
+            dmft.corr_ = shci_kernel (dmft.mf_)
 
         if dmft.solver_type == 'scf':
             gf_imp = _gf_imp (freqs, delta, dmft.mf_)
-        elif dmft.solver_type in ('cc', 'tdcc', 'cc_ao', 'tdcc_ao', 'fci'):
+        elif dmft.solver_type in ('cc', 'tdcc', 'cc_ao', 'tdcc_ao', 'fci',
+                                  'shci'):
             gf_imp = _gf_imp (freqs, delta, dmft.mf_, dmft.corr_)
     
         gf_imp = gf_imp[:nao,:nao,:]
 
-
-        
         nb = bath_e.shape[0]
         sgdum = np.zeros((nb+nao,nb+nao,nw))
         gf0_imp = get_gf(himp, sgdum, freqs, delta)
@@ -615,6 +678,9 @@ class DMFT:
         elif self.solver_type == 'fci':
             assert (fci_)
             gf = fci_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
+        elif self.solver_type == 'shci':
+            assert (fci_)
+            gf = shci_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
         return gf[:self.nao,:self.nao,:]
 
     def _gf0 (self, freqs, delta):
@@ -1078,7 +1144,8 @@ def hub_cell_2d (nx, ny, isx, isy, U, nw, bas=None, fill=1., chkf=None, \
 
 def test():
     U = 2.
-    dmft, w, delta = hub_1d (100, U, 19, solver_type='cc_ao')
+    #dmft, w, delta = hub_1d (100, U, 19, solver_type='cc_ao')
+    dmft, w, delta = hub_1d (20, U, 10, solver_type='shci')
     #dmft, w, delta = hub_1d (2, U, 3, solver_type='cc')
     # dmft, w, delta = hub_2d (10, 10, U, 9, solver_type='scf')
 
