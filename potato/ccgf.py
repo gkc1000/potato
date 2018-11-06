@@ -164,7 +164,7 @@ def ea_shape(cc):
 
 
 class CCGF(object): 
-    def __init__(self, mycc, tol=1e-3, verbose=0):
+    def __init__(self, mycc, tol=1e-4, verbose=0):
         self._cc = mycc
         self.tol = tol
         self.verbose = verbose
