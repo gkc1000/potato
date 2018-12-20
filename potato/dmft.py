@@ -12,7 +12,7 @@ from pyscf.lib import logger
 from pyscf import gto, ao2mo, cc
 import scf_mu as scf
 
-import ccgf 
+import ccgf
 
 fci_ = False
 try:
@@ -23,9 +23,43 @@ except:
     pass
 
 
-def kernel(dmft, mu, fill=1., conv_tol=1e-6, dump_chk=True, verbose=None):
-    '''DMFT self-consistency cycle'''
+def kernel(dmft, mu0, occupancy=1., delta=None, sigma0=None,
+           conv_tol=None, opt_mu=False, mu_tol=1.e-2):
+    '''DMFT at fixed occupancy, searching over mu'''
+    dmft_conv = False
+    if opt_mu:
+        def _occupancy_error(mu):
+            logger.info(dmft, 'trying mu = %s', mu)
+            dmft_conv = kernel_mu(dmft, mu, delta=delta, sigma0=sigma0,
+                                  conv_tol=conv_tol)
+            occupancy_ = np.trace(dmft.get_rdm_imp())/(dmft.nao)
+            logger.info(dmft, 'current occupancy = %s', occupancy_)
+            logger.info(dmft, 'target occupancy = %s', occupancy)
+            return occupancy-occupancy_
+
+        #TODO: Automate choice of bounds
+        mu_min, mu_max = -0.1, 0.1
+        mu = optimize.brentq(_occupancy_error, mu_min, mu_max, xtol=mu_tol)
+        occupancy_ = np.trace(dmft.get_rdm_imp())/(dmft.nao)
+        logger.info(dmft, 'converged on mu = %s', mu)
+        logger.info(dmft, 'calculated occupancy = %s', occupancy_)
+        logger.info(dmft, 'target occupancy = %s', occupancy)
+    else:
+        mu = mu0
+        dmft_conv = kernel_mu(dmft, mu, delta=delta, sigma0=sigma0,
+                              conv_tol=conv_tol)
+
+    return dmft_conv, mu
+
+def kernel_mu(dmft, mu, delta=None, sigma0=None,
+              conv_tol=None, dump_chk=True):
+    '''DMFT self-consistency cycle at fixed mu'''
     cput0 = (time.clock(), time.time())
+
+    if delta is None:
+        delta = dmft.delta
+    if conv_tol is None:
+        conv_tol = dmft.conv_tol
 
     hcore_k = dmft.hcore_k
     eris = dmft.eris
@@ -37,22 +71,22 @@ def kernel(dmft, mu, fill=1., conv_tol=1e-6, dump_chk=True, verbose=None):
         assert (np.allclose(np.zeros((nao,nao,)), hcore_cell.imag))
         hcore_cell = hcore_cell.real
 
-    nw = dmft.nbath 
-    if dmft.freqs is None:
-        #TODO: automate the choice of frequency range, or allow user choice
-        wl, wh = -7.+dmft.mu, 7.+dmft.mu
-        #freqs, wts = _get_linear_freqs(wl, wh, nw)
-        freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
-        dmft.freqs = freqs
-        dmft.wts = wts
-    else:
-        freqs, wts = dmft.freqs, dmft.wts
+    nw = dmft.nbath
+    #TODO: automate the choice of frequency range, or allow user choice
+    #      although the optimal choice may depend on mu, which is changing
+    U = eris[0,0,0,0]
+    wl, wh = -7.+U/2, 7.+U/2
+    #wl, wh = -9.+U/2, 9.+U/2
+    #freqs, wts = _get_linear_freqs(wl, wh, nw)
+    freqs, wts = _get_scaled_legendre_roots(wl, wh, nw)
+    dmft.freqs = freqs
+    dmft.wts = wts
 
-    if dmft.sigma is None:
-        sigma = np.zeros([nao, nao, nw])
+    if sigma0 is None:
+        sigma = dmft.get_init_sigma()
     else:
-        assert (dmft.sigma.shape == (nao,nao,nw))
-        sigma = dmft.sigma.copy()
+        assert (sigma0.shape == (nao,nao,nw))
+        sigma = sigma0.copy()
 
     gf0_cell = get_gf(hcore_cell, sigma, freqs, delta)
     gf_cell = np.zeros([nao, nao, nw], np.complex128)
@@ -77,7 +111,7 @@ def kernel(dmft, mu, fill=1., conv_tol=1e-6, dump_chk=True, verbose=None):
         bath_v, bath_e = get_bath(hyb, freqs, wts)
         himp, eri_imp = imp_ham(hcore_cell, eris, bath_v, bath_e)
 
-        dmft._scf = mf_kernel(himp, eri_imp, dmft.mu)
+        dmft._scf = mf_kernel(himp, eri_imp, mu, verbose=dmft.verbose)
         gf_imp = dmft.get_gf_imp(freqs, delta)
         gf_imp = gf_imp[:nao,:nao,:]
 
@@ -95,9 +129,9 @@ def kernel(dmft, mu, fill=1., conv_tol=1e-6, dump_chk=True, verbose=None):
         hyb_new = get_sigma(gf0_cell, gf_cell)
 
         damp = dmft.damp
-        if (abs(damp) > 1e-4 and 
+        if (abs(damp) > 1e-4 and
             (0 <= cycle < diis_start_cycle-1 or dmft_diis is None)):
-            hyb_new = damp*hyb_new + (1-damp)*hyb 
+            hyb_new = damp*hyb_new + (1-damp)*hyb
         hyb = dmft.run_diis(hyb_new, cycle, dmft_diis)
 
         dmft.hyb = hyb
@@ -112,12 +146,47 @@ def kernel(dmft, mu, fill=1., conv_tol=1e-6, dump_chk=True, verbose=None):
         #if dump_chk and dmft.chkfile:
         #    dmft.dump_chk()
 
+        #if dmft.verbose >= logger.DEBUG:
+        #    write_dos_and_sigma(dmft, cycle+1)
+
         cput1 = logger.timer(dmft, 'cycle= %d'%(cycle+1), *cput1)
         cycle += 1
 
     logger.timer(dmft, 'DMFT_cycle', *cput0)
     return dmft_conv
 
+def write_dos_and_sigma(dmft, cycle):
+    cput0 = (time.clock(), time.time())
+
+    U = dmft.eris[0,0,0,0]
+    eta = 0.5 # hardcoded :-(
+    occupancy = dmft.occupancy
+    if occupancy is None:
+        occupancy = 1.00
+
+    verbose = dmft._scf.mol.verbose
+    dmft._scf.mol.verbose = 0
+
+    wl, wh = -10.+U/2., 10.+U/2.
+    freqs = np.linspace(wl, wh, 64)
+    ldos = dmft.get_ldos_imp(freqs, eta)[0]
+
+    filename = 'ldos_%d.dat'%(cycle)
+    with open(filename, 'w') as f:
+        f.write('# mu = %0.12g\n'%(dmft.mu))
+        for w,freq in enumerate(freqs):
+            f.write('%0.12g %.12g %.12g\n'%(freq, freq-dmft.mu, ldos[w]))
+
+    omega_ns = np.linspace(0., 20., 64)
+    sigma = dmft.get_sigma_imp(1j*omega_ns, 0.0)[0,0]
+    sigma = np.imag(sigma)
+    filename = 'sigma_%d.dat'%(cycle)
+    with open(filename, 'w') as f:
+        for n,wn in enumerate(omega_ns):
+            f.write('%.12g %.12g\n'%(wn, sigma[n]))
+
+    dmft._scf.mol.verbose = verbose
+    logger.timer(dmft, 'write LDOS and sigma for debugging', *cput0)
 
 def _get_delta(eigs):
     """
@@ -144,11 +213,11 @@ def _get_scaled_legendre_roots(wl, wh, nw):
     return freqs, wts
 
 def _get_linear_freqs(wl, wh, nw):
-    freqs = np.linspace(wl, wh, nw) 
+    freqs = np.linspace(wl, wh, nw)
     wts = np.ones([nw]) * (wh - wl) / (nw - 1.)
     return freqs, wts
 
-def get_sigma (mf_gf, corr_gf):
+def get_sigma(mf_gf, corr_gf):
     nw = mf_gf.shape[2]
     sigma = np.zeros_like(mf_gf)
     for iw in range(nw):
@@ -158,22 +227,34 @@ def get_sigma (mf_gf, corr_gf):
 def mf_kernel(himp, eri_imp, mu, verbose=logger.NOTE):
     n = himp.shape[0]
     mol = gto.M()
+    mol.verbose = verbose
     mol.build()
 
     mf = scf.RHF(mol, mu)
-    mf.verbose = verbose 
     mf.max_memory = 1000
     mf.mo_energy = np.zeros([n])
-    mf.mo_energy[:n/2] = mf.mu-0.01
-    mf.mo_energy[n/2:] = mf.mu+0.01
 
     mf.get_hcore = lambda *args: himp
     mf.get_ovlp = lambda *args: np.eye(n)
     mf._eri = ao2mo.restore(8, eri_imp, n)
     mf.init_guess = '1e'  # currently needed
 
+    mf.smearing = None
     mf.scf()
-    return mf
+    if mf.converged:
+        return mf
+    else:
+        # If SCF does not converge, try smearing for convergence, then do
+        # one-shot HF without smearing
+        mf.smearing = 0.1
+        mf.scf()
+        if mf.converged is False:
+            raise RuntimeError('SCF with smearing not converged.')
+        dm0 = mf.make_rdm1()
+        mf.smearing = None
+        mf.max_cycle = 1
+        mf.scf(dm0=dm0)
+        return mf
 
 
 class FCIsol:
@@ -246,22 +327,40 @@ def mf_gf(mf, freqs, delta, ao_orbs=None):
     return gf[:nao,:nao]
 
 
-def cc_gf(mf, freqs, delta, ao_orbs=None, tol=1e-4):
+def cc_gf(mf, freqs, delta, ao_orbs=None, gmres_tol=1e-4):
     ''' Calculate the CCSD GF matrix in the AO basis'''
     if ao_orbs is None:
-        nmo = mf._mo_coeff.shape[0] 
+        nmo = mf._mo_coeff.shape[0]
         ao_orbs = range(nmo)
     nao = len(ao_orbs)
     mycc = cc.RCCSD(mf)
-    #mycc.verbose = 7
+    mycc.max_cycle = 200
+    #mycc.diis = False
     mycc.ccsd()
+    if mycc.converged is False:
+        raise RuntimeError('Ground-state CCSD not converged.')
     mycc.solve_lambda()
-    gf = ccgf.CCGF(mycc, tol=tol)
+    gf = ccgf.CCGF(mycc, tol=gmres_tol)
+    # Note .conj()'s to make this the retarded GF
     g_ip = gf.ipccsd_ao(ao_orbs, freqs.conj(), mf.mo_coeff, delta).conj()
     g_ea = gf.eaccsd_ao(ao_orbs, freqs, mf.mo_coeff, delta)
     gf = g_ip + g_ea
 
     return gf[:nao,:nao]
+
+
+def cc_rdm(mf, ao_orbs=None):
+    if ao_orbs is None:
+        nmo = mf._mo_coeff.shape[0]
+        ao_orbs = range(nmo)
+    nao = len(ao_orbs)
+    mycc = cc.RCCSD(mf)
+    mycc.ccsd()
+    mycc.solve_lambda()
+    rdm_mo = mycc.make_rdm1()
+    rdm = np.dot(mf.mo_coeff, np.dot(rdm_mo, mf.mo_coeff.T))
+
+    return rdm[:nao,:nao]
 
 
 def fci_gf (freqs, delta, fcisol, mo_coeff):
@@ -299,7 +398,7 @@ def get_gf(hcore, sigma, freqs, delta):
     """
     Green's function at a set of frequencies
 
-    Args: 
+    Args:
          hcore : (nao, nao) ndarray
          sigma : (nao, nao) ndarray
          freqs : (nw) ndarray
@@ -331,7 +430,7 @@ def imp_ham (hcore_cell, eri_cell, bath_v, bath_e):
 
 def get_bath(hyb, freqs, wts):
     """
-    Convert hybridization function 
+    Convert hybridization function
     to bath couplings and energies
 
     Args:
@@ -370,10 +469,12 @@ def get_bath(hyb, freqs, wts):
                     np.sqrt(wts[iw])
 
     nimp = hyb.shape[0]
-    bath_v = np.reshape(v, [nimp, -1])
-    bath_e = np.zeros([nimp * nw])
+    # bath_v[p,k_n] is the coupling btw impurity site p and bath orbital k
+    # (total number nw=nbath) belonging to bath n (total number nimp)
+    bath_v = v.reshape([nimp, nimp*nw])
+    bath_e = np.zeros([nimp*nw])
 
-    # bath_e is [nimp * nw] array, with entries
+    # bath_e is [nimp*nw] array, with entries
     # w1, w2 ... wn, w1, w2 ... wn, ...
     for ip in range(nimp):
         for iw in range(nw):
@@ -384,12 +485,12 @@ def get_bath(hyb, freqs, wts):
 class DMFT(lib.StreamObject):
     max_cycle = 50
     conv_tol = 1e-3
-    damp = 0.7 
-    gmres_tol = 1e-3
+    damp = 0.7
+    gmres_tol = 1e-4
 
-    diis = True 
-    diis_space = 6 
-    diis_start_cycle = 1 
+    diis = True
+    diis_space = 6
+    diis_start_cycle = 1
     diis_file = None
     def __init__(self, hcore_k, eris, nbath, solver_type='scf'):
         self.nkpts, self.nao = hcore_k.shape[:2]
@@ -398,10 +499,10 @@ class DMFT(lib.StreamObject):
 
         self.hcore_k = hcore_k
         self.eris = eris
-        self.nbath =nbath
+        self.nbath = nbath
         self.solver_type = solver_type
 
-        self.verbose = logger.NOTE 
+        self.verbose = logger.NOTE
         self.chkfile = None
 
         # do not touch
@@ -424,16 +525,19 @@ class DMFT(lib.StreamObject):
         logger.info(self, '******** %s flags ********', self.__class__)
         logger.info(self, 'impurity solver = %s', self.solver_type)
         logger.info(self, 'n impurity orbitals = %d', self.nao)
-        logger.info(self, 'n bath orbitals = %d', self.nbath)
+        logger.info(self, 'n bath orbitals per impurity = %d', self.nbath)
+        logger.info(self, 'n bath orbitals total = %d', self.nbath*self.nao)
         logger.info(self, 'nkpts in lattice = %d', self.nkpts)
         if self.opt_mu:
-            logger.info(self, 'mu will be optimized, init guess = %g', self.mu)
+            logger.info(self, 'mu will be optimized, init guess = %g, target occupancy = %g',
+                        self.mu, self.occupancy)
         else:
             logger.info(self, 'mu is fixed, mu = %g', self.mu)
         logger.info(self, 'damping factor = %g', self.damp)
         logger.info(self, 'DMFT convergence tol = %g', self.conv_tol)
         logger.info(self, 'max. DMFT cycles = %d', self.max_cycle)
         logger.info(self, 'GMRES convergence tol = %g', self.gmres_tol)
+        logger.info(self, 'delta for discretization = %g', self.delta)
         logger.info(self, 'using diis = %s', self.diis)
         if self.diis:
             logger.info(self, 'diis_space = %d', self.diis_space)
@@ -456,17 +560,37 @@ class DMFT(lib.StreamObject):
                 fh5['dmft/eris'] = self.eris
         return self
 
-    def kernel(self, mu0=None, fill=1., delta=0.1,
-               conv_tol=None, opt_mu=False, mu_tol=1.e-4):
+
+    def get_init_sigma(self, freqs=None):
+        nao, nbath = self.nao, self.nbath
+        sigma = np.empty([nao,nao,nbath], dtype=np.complex)
+        U = self.eris[0,0,0,0]
+        if freqs is None:
+            freqs = self.freqs
+        if self.occupancy is None:
+            occupancy = 1.
+        else:
+            occupancy = self.occupancy
+        for iw,w in enumerate(freqs):
+            sigma[:,:,iw] = U*occupancy/2.*np.eye(nao)
+        return sigma
+
+
+    def kernel(self, mu0, occupancy=None, delta=0.1, sigma0=None,
+               conv_tol=None, opt_mu=False, mu_tol=1.e-2):
         '''main routine for DMFT
+
+        Args:
+            mu0 : float
+                Chemical potential or an initial guess if opt_mu=True
         
         Kwargs:
-            mu0 : float
-                Chemical potential, possibly only an initial guess
-            fill : float
-                Filling fraction (1 is half filling)
+            occupancy : None or float
+                Target average occupancy (1 is half filling)
             delta : float
                 Broadening used during self-consistency
+            sigma0 : numpy ndarray
+                Initial guess for the self-energy
             conv_tol : float
                 Convergence tolerance on the hybridization
             opt_mu : bool
@@ -477,34 +601,34 @@ class DMFT(lib.StreamObject):
         '''
 
         cput0 = (time.clock(), time.time())
+        self.mu = mu0
+        self.occupancy = occupancy
         self.delta = delta
         if conv_tol:
             self.conv_tol = conv_tol
-        self.mu = mu0
         self.opt_mu = opt_mu
 
         self.dump_flags()
 
-        if opt_mu:
-            def _filling_error(mu):
-                self._kernel_mu(mu, fill, delta, conv_tol)
-                fill_ = self.nfrac_imag(delta, epsrel=0.1*mu_tol)
-                logger.info(self, 'mu = %s', mu)
-                logger.info(self, 'current filling frac = %s', fill_)
-                logger.info(self, 'target filling frac = %s', fill)
-                return fill-fill_
+        self.converged, self.mu = kernel(self, mu0, occupancy=occupancy, delta=delta, sigma0=sigma0,
+                                         conv_tol=conv_tol, opt_mu=opt_mu, mu_tol=mu_tol)
 
-            mu = optimize.newton(_filling_error, mu0, tol=mu_tol)
-            self.mu = mu
-        else:
-            self.converged = self._kernel_mu(mu0, fill, self.conv_tol)
+        self._finalize()
         logger.timer(self, 'DMFT', *cput0)
 
     def dmft(self, **kwargs):
         return self.kernel(**kwargs)
 
-    def _kernel_mu(self, mu, fill, conv_tol):
-        return kernel(self, mu, fill=fill, conv_tol=conv_tol)
+    def _kernel_mu(self, mu, occupancy, conv_tol):
+        return kernel(self, mu, occupancy=occupancy, conv_tol=conv_tol)
+
+    def _finalize(self):
+        '''Hook for dumping results and clearing up the object.'''
+        if self.converged:
+            logger.info(self, '%s converged', self.__class__.__name__)
+        else:
+            logger.note(self, '%s not converged', self.__class__.__name__)
+        return self
 
     def run_diis(self, hyb, istep, adiis):
         if (adiis and istep >= self.diis_start_cycle):
@@ -512,12 +636,22 @@ class DMFT(lib.StreamObject):
             logger.debug1(self, 'DIIS for step %d', istep)
         return hyb
 
+    def get_rdm_imp(self):
+        '''Calculate the interacting local RDM from the impurity problem'''
+        if self.solver_type == 'scf':
+            return NotImplementedError
+        elif self.solver_type == 'cc':
+            return cc_rdm(self._scf, ao_orbs=range(self.nao))
+        elif self.solver_type == 'fci':
+            raise NotImplementedError
+
     def get_gf_imp(self, freqs, delta):
         '''Calculate the interacting local GF from the impurity problem'''
         if self.solver_type == 'scf':
             return mf_gf(self._scf, freqs, delta)
         elif self.solver_type == 'cc':
-            return cc_gf(self._scf, freqs, delta, ao_orbs=range(self.nao), tol=self.gmres_tol)
+            return cc_gf(self._scf, freqs, delta, ao_orbs=range(self.nao),
+                         gmres_tol=self.gmres_tol)
         elif self.solver_type == 'fci':
             raise NotImplementedError
             #assert (fci_)
@@ -581,7 +715,7 @@ class DMFT(lib.StreamObject):
         elif self.solver_type == 'cc_ao':
             gf = cc_gf_ao (self.nao, freqs, delta, self.corr_, self.mf_.mo_coeff)
         elif self.solver_type == 'tdcc':
-            gf = tdcc_gf (freqs, delta, self.corr_, self.mf_.mo_coeff) 
+            gf = tdcc_gf (freqs, delta, self.corr_, self.mf_.mo_coeff)
         elif self.solver_type == 'tdcc_ao':
             gf = tdcc_gf_ao (self.nao, freqs, delta, self.corr_, self.mf_.mo_coeff)
         elif self.solver_type == 'fci':
