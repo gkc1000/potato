@@ -94,7 +94,7 @@ def greens_b_doubles_ip_rhf(t2, p):
     if p < nocc:
         return np.zeros((nocc, nocc, nvir), dtype=ds_type)
     else:
-        return t2[:, :, :, p - nocc]
+        return t2[:, :, p - nocc, :]
 
 
 def greens_b_vector_ip_rhf(cc, p):
