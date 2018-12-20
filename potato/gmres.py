@@ -8,6 +8,7 @@ class GMRES(object):
         self.b = b.reshape(-1)
         self.x0 = x0.reshape(-1)
         self.tol = tol
+        self.niter = 0
         if diag is None:
             self.M = None
         else:
@@ -17,8 +18,10 @@ class GMRES(object):
 
     def solve(self):
         callback = None
-        #def callback(rk):
-        #    print "residual =", rk
+        self.niter = 0
+        def callback(rk):
+            #print "residual =", rk
+            self.niter += 1
         #self.x, self.info = spla.gmres(self.A, self.b, x0=self.x0, M=self.M, callback=callback, restart=100, tol=self.tol)
         self.x, self.info = spla.gcrotmk(self.A, self.b, x0=self.x0, M=self.M, callback=callback, m=100, tol=self.tol)
         self.x = self.x.reshape(-1)
