@@ -1,9 +1,13 @@
+import time
+import sys
+
 import numpy as np
 import scipy
 import gmres
 
 import pyscf
 import pyscf.cc
+from pyscf.lib import logger
 from pyscf.cc.eom_rccsd import amplitudes_to_vector_ip, amplitudes_to_vector_ea
 
 '''
@@ -164,10 +168,14 @@ def ea_shape(cc):
 
 
 class CCGF(object): 
-    def __init__(self, mycc, tol=1e-4, verbose=0):
+    def __init__(self, mycc, tol=1e-4, verbose=None):
         self._cc = mycc
         self.tol = tol
-        self.verbose = verbose
+        if verbose:
+            self.verbose = verbose
+        else:
+            self.verbose = self._cc.verbose
+        self.stdout = sys.stdout
 
     def ipccsd_ao(self, ps, omega_list, mo_coeff, broadening):
         eomip = pyscf.cc.eom_rccsd.EOMIP(self._cc)
@@ -186,16 +194,21 @@ class CCGF(object):
 
         gf_ao = np.zeros((len(ps), len(ps), len(omega_list)), dtype=np.complex128)
         for ip, p in enumerate(ps):
-            for iomega in range(len(omega_list)):
+            x0 = None
+            for iomega in range(len(omega_list))[::-1]:
                 curr_omega = omega_list[iomega]
 
                 def matr_multiply(vector, args=None):
                     return greens_func_multiply(eomip.matvec, vector, curr_omega - 1j * broadening, imds=eomip_imds)
 
                 diag_w = diag + curr_omega-1j*broadening
-                x0 = b_vector_ao[:,p]/diag_w
+                if x0 is None:
+                    x0 = b_vector_ao[:,p]/diag_w
                 solver = gmres.GMRES(matr_multiply, b_vector_ao[:,p], x0, diag_w, tol=self.tol)
+                cput1 = (time.clock(), time.time())
                 sol = solver.solve().reshape(-1)
+                cput1 = logger.timer(self, 'IPGF GMRES orbital p = %d/%d, freq w = %d/%d (%d iterations)'%(
+                    ip+1,len(ps),iomega+1,len(omega_list),solver.niter), *cput1)
                 x0 = sol
                 for iq, q in enumerate(ps):
                     gf_ao[ip, iq, iomega] = -np.dot(e_vector_ao[iq, :], sol)
@@ -218,6 +231,7 @@ class CCGF(object):
 
         gf_ao = np.zeros((len(ps), len(ps), len(omega_list)), dtype=np.complex128)
         for iq, q in enumerate(ps):
+            x0 = None
             for iomega in range(len(omega_list)):
                 curr_omega = omega_list[iomega]
 
@@ -225,9 +239,13 @@ class CCGF(object):
                     return greens_func_multiply(eomea.matvec, vector, -curr_omega - 1j * broadening, imds=eomea_imds)
 
                 diag_w = diag + (-curr_omega-1j*broadening)
-                x0 = b_vector_ao[:,q]/diag_w
+                if x0 is None:
+                    x0 = b_vector_ao[:,q]/diag_w
                 solver = gmres.GMRES(matr_multiply, b_vector_ao[:,q], x0, diag_w, tol=self.tol)
+                cput1 = (time.clock(), time.time())
                 sol = solver.solve().reshape(-1)
+                cput1 = logger.timer(self, 'EAGF GMRES orbital q = %d/%d, freq w = %d/%d (%d iterations)'%(
+                    iq+1,len(ps),iomega+1,len(omega_list),solver.niter), *cput1)
                 x0 = sol
                 for ip, p in enumerate(ps):
                     gf_ao[ip, iq, iomega] = np.dot(e_vector_ao[ip], sol)
