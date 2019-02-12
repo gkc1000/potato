@@ -257,60 +257,6 @@ def mf_kernel(himp, eri_imp, mu, verbose=logger.NOTE):
         return mf
 
 
-class FCIsol:
-    def __init__ (self, HamCheMPS2, theFCI, GSvector, GSenergy):
-        assert (fci_)
-
-        assert (isinstance(HamCheMPS2, PyCheMPS2.PyHamiltonian))
-        self.HamCheMPS2 = HamCheMPS2
-        assert (isinstance(theFCI, PyCheMPS2.PyFCI))
-        self.FCI = theFCI
-        self.GSvector = GSvector
-        self.GSenergy = GSenergy
-
-def fci_kernel (mf_):
-    norb = mf_.mo_coeff.shape[0]
-    h0   = 0.
-    h1t  = np.dot(mf_.mo_coeff.T, \
-                  np.dot(mf_.get_hcore(), mf_.mo_coeff))
-    erit = ao2mo.incore.full(mf_._eri, mf_.mo_coeff, compact=False)
-    erit = erit.reshape([norb,norb,norb,norb])
-
-    Initializer = PyCheMPS2.PyInitialize()
-    Initializer.Init()
-
-    # Setting up the Hamiltonian
-    Group = 0
-    orbirreps = np.zeros((norb,), dtype=ctypes.c_int)
-    HamCheMPS2 = PyCheMPS2.PyHamiltonian(norb, Group, orbirreps)
-    HamCheMPS2.setEconst( h0 )
-    for cnt1 in range(norb):
-        for cnt2 in range(norb):
-            HamCheMPS2.setTmat(cnt1, cnt2, h1t[cnt1,cnt2])
-            for cnt3 in range(norb):
-                for cnt4 in range(norb):
-                    HamCheMPS2.setVmat(cnt1, cnt2, cnt3, cnt4, \
-                                       erit[cnt1,cnt3,cnt2,cnt4])
-
-    nel = np.count_nonzero(mf_.mo_occ)*2
-    assert( nel % 2 == 0 )
-    Nel_up       = nel / 2
-    Nel_down     = nel / 2
-    Irrep        = 0
-    maxMemWorkMB = 100.0
-    FCIverbose   = 0
-    theFCI = PyCheMPS2.PyFCI( HamCheMPS2, Nel_up, Nel_down, \
-                              Irrep, maxMemWorkMB, FCIverbose )
-    GSvector = np.zeros( [ theFCI.getVecLength() ], \
-                         dtype=ctypes.c_double )
-    GSvector[ theFCI.LowestEnergyDeterminant() ] = 1
-    EnergyCheMPS2 = theFCI.GSDavidson( GSvector )
-    print "FCI corr = %20.12f" % (EnergyCheMPS2-mf_.e_tot)
-
-    fcisol = FCIsol(HamCheMPS2, theFCI, GSvector, EnergyCheMPS2)
-    return fcisol
-
-
 def mf_gf(mf, freqs, delta, ao_orbs=None):
     ''' Calculate the mean-field GF matrix in the AO basis'''
     nmo = mf.mo_coeff.shape[0]
@@ -330,7 +276,7 @@ def mf_gf(mf, freqs, delta, ao_orbs=None):
 def cc_gf(mf, freqs, delta, ao_orbs=None, gmres_tol=1e-4):
     ''' Calculate the CCSD GF matrix in the AO basis'''
     if ao_orbs is None:
-        nmo = mf._mo_coeff.shape[0]
+        nmo = mf.mo_coeff.shape[0]
         ao_orbs = range(nmo)
     nao = len(ao_orbs)
     mycc = cc.RCCSD(mf)
@@ -351,7 +297,7 @@ def cc_gf(mf, freqs, delta, ao_orbs=None, gmres_tol=1e-4):
 
 def cc_rdm(mf, ao_orbs=None):
     if ao_orbs is None:
-        nmo = mf._mo_coeff.shape[0]
+        nmo = mf.mo_coeff.shape[0]
         ao_orbs = range(nmo)
     nao = len(ao_orbs)
     mycc = cc.RCCSD(mf)
@@ -363,17 +309,76 @@ def cc_rdm(mf, ao_orbs=None):
     return rdm[:nao,:nao]
 
 
-def fci_gf (freqs, delta, fcisol, mo_coeff):
-    n  = mo_coeff.shape[0]
+class FCIsol:
+    def __init__(self, HamCheMPS2, theFCI, GSvector, GSenergy):
+        assert (fci_)
+
+        assert (isinstance(HamCheMPS2, PyCheMPS2.PyHamiltonian))
+        self.HamCheMPS2 = HamCheMPS2
+        assert (isinstance(theFCI, PyCheMPS2.PyFCI))
+        self.FCI = theFCI
+        self.GSvector = GSvector
+        self.GSenergy = GSenergy
+
+def fci_kernel(mf):
+    norb = mf.mo_coeff.shape[0]
+    h0 = 0.
+    h1t = np.dot(mf.mo_coeff.T, \
+                 np.dot(mf.get_hcore(), mf.mo_coeff))
+    erit = ao2mo.incore.full(mf._eri, mf.mo_coeff, compact=False)
+    erit = erit.reshape([norb,norb,norb,norb])
+
+    Initializer = PyCheMPS2.PyInitialize()
+    Initializer.Init()
+
+    # Setting up the Hamiltonian
+    Group = 0
+    orbirreps = np.zeros((norb,), dtype=ctypes.c_int)
+    HamCheMPS2 = PyCheMPS2.PyHamiltonian(norb, Group, orbirreps)
+    HamCheMPS2.setEconst( h0 )
+    for cnt1 in range(norb):
+        for cnt2 in range(norb):
+            HamCheMPS2.setTmat(cnt1, cnt2, h1t[cnt1,cnt2])
+            for cnt3 in range(norb):
+                for cnt4 in range(norb):
+                    HamCheMPS2.setVmat(cnt1, cnt2, cnt3, cnt4, \
+                                       erit[cnt1,cnt3,cnt2,cnt4])
+
+    nel = np.count_nonzero(mf.mo_occ)*2
+    assert( nel % 2 == 0 )
+    Nel_up = nel / 2
+    Nel_down = nel / 2
+    Irrep = 0
+    maxMemWorkMB = 100.0
+    FCIverbose = 0
+    theFCI = PyCheMPS2.PyFCI( HamCheMPS2, Nel_up, Nel_down, \
+                              Irrep, maxMemWorkMB, FCIverbose )
+    GSvector = np.zeros( [ theFCI.getVecLength() ], \
+                         dtype=ctypes.c_double )
+    GSvector[ theFCI.LowestEnergyDeterminant() ] = 1
+    EnergyCheMPS2 = theFCI.GSDavidson( GSvector )
+    print "FCI corr = %20.12f" % (EnergyCheMPS2-mf.e_tot)
+
+    fcisol = FCIsol(HamCheMPS2, theFCI, GSvector, EnergyCheMPS2)
+    return fcisol
+
+
+def fci_gf(mf, freqs, delta, ao_orbs=None, gmres_tol=1e-4):
+    if ao_orbs is None:
+        nmo = mf.mo_coeff.shape[0]
+        ao_orbs = range(nmo)
+    nao = len(ao_orbs)
+    nmo = mf.mo_coeff.shape[0]
     nw = len(freqs)
-    gf = np.zeros([n, n, nw], np.complex128)
+    gf = np.zeros([nmo, nmo, nw], np.complex128)
 
-    orbsLeft  = np.arange(n, dtype=ctypes.c_int)
-    orbsRight = np.arange(n, dtype=ctypes.c_int)
+    orbsLeft  = np.arange(nmo, dtype=ctypes.c_int)
+    orbsRight = np.arange(nmo, dtype=ctypes.c_int)
 
-    theFCI     = fcisol.FCI
-    energy_gs  = fcisol.GSenergy
-    gs_vector  = fcisol.GSvector
+    fcisol = fci_kernel(mf)
+    theFCI = fcisol.FCI
+    energy_gs = fcisol.GSenergy
+    gs_vector = fcisol.GSvector
     HamCheMPS2 = fcisol.HamCheMPS2
     for iw, w in enumerate(freqs):
         if np.iscomplex(w):
@@ -384,15 +389,34 @@ def fci_gf (freqs, delta, fcisol, mo_coeff):
             wi = 0.
         ReGF, ImGF = theFCI.GFmatrix_rem (wr-energy_gs, 1.0, wi+delta, \
                 orbsLeft, orbsRight, 1, gs_vector, HamCheMPS2)
-        gf_ = (ReGF.reshape((n,n), order='F') + \
-               1j*ImGF.reshape((n,n), order='F')).T
+        gf_ = (ReGF.reshape((nmo,nmo), order='F') + \
+               1j*ImGF.reshape((nmo,nmo), order='F')).T
 
         ReGF, ImGF = theFCI.GFmatrix_add (wr+energy_gs, -1.0, wi+delta, \
                 orbsLeft, orbsRight, 1, gs_vector, HamCheMPS2)
-        gf_ += ReGF.reshape((n,n), order='F') + \
-               1j*ImGF.reshape((n,n), order='F')
-        gf[:,:,iw] = np.dot(mo_coeff, np.dot(gf_, mo_coeff.T))
-    return gf
+        gf_ += ReGF.reshape((nmo,nmo), order='F') + \
+               1j*ImGF.reshape((nmo,nmo), order='F')
+        gf[:,:,iw] = np.dot(mf.mo_coeff, np.dot(gf_, mf.mo_coeff.T))
+    return gf[:nao,:nao]
+
+
+def fci_rdm(mf, ao_orbs=None):
+    if ao_orbs is None:
+        nmo = mf.mo_coeff.shape[0]
+        ao_orbs = range(nmo)
+    nao = len(ao_orbs)
+    nmo = mf.mo_coeff.shape[0]
+    fcisol = fci_kernel(mf)
+    theFCI = fcisol.FCI
+    gs_vector = fcisol.GSvector
+    rdm2 = np.zeros(nmo**4) 
+    theFCI.Fill2RDM(gs_vector, rdm2) 
+    rdm2 = rdm2.reshape((nmo,nmo,nmo,nmo))
+    rdm_mo = np.einsum('ikkj->ij', rdm2.transpose((0,1,3,2)))/(nmo-1)
+    rdm = np.dot(mf.mo_coeff, np.dot(rdm_mo, mf.mo_coeff.T))
+
+    return rdm[:nao,:nao]
+
 
 def get_gf(hcore, sigma, freqs, delta):
     """
@@ -643,7 +667,7 @@ class DMFT(lib.StreamObject):
         elif self.solver_type == 'cc':
             return cc_rdm(self._scf, ao_orbs=range(self.nao))
         elif self.solver_type == 'fci':
-            raise NotImplementedError
+            return fci_rdm(self._scf, ao_orbs=range(self.nao)) 
 
     def get_gf_imp(self, freqs, delta):
         '''Calculate the interacting local GF from the impurity problem'''
@@ -653,9 +677,10 @@ class DMFT(lib.StreamObject):
             return cc_gf(self._scf, freqs, delta, ao_orbs=range(self.nao),
                          gmres_tol=self.gmres_tol)
         elif self.solver_type == 'fci':
-            raise NotImplementedError
-            #assert (fci_)
-            #return fci_gf(freqs, delta, corr_, mf_.mo_coeff)
+            #raise NotImplementedError
+            assert (fci_)
+            return fci_gf(self._scf, freqs, delta, ao_orbs=range(self.nao),
+                          gmres_tol=self.gmres_tol)
 
     def get_gf0_imp(self, freqs, delta):
         '''Calculate the noninteracting local GF from the impurity problem'''

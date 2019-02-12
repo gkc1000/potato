@@ -48,10 +48,10 @@ def get_hubbard_1d_ints(U, nimp, nbath, nkx=100):
     return hcore_k, eri
 
 
-def dmft_hub_1d(U, nimp, nbath, mu, delta):
+def dmft_hub_1d(U, nimp, nbath, mu, delta, solver_type='cc'):
     hcore_k, eri = get_hubbard_1d_ints(U, nimp, nbath)
 
-    mydmft = dmft.DMFT(hcore_k, eri, nbath, solver_type='cc')
+    mydmft = dmft.DMFT(hcore_k, eri, nbath, solver_type=solver_type)
     mydmft.chkfile = None 
     mydmft.verbose = 7
     mydmft.diis = True
@@ -69,16 +69,18 @@ def dmft_hub_1d(U, nimp, nbath, mu, delta):
     eta = 0.5
     ldos = mydmft.get_ldos_imp(freqs, eta)[0]
 
-    filename = 'hubbard_1d_U-%.0f_mu-%0.2f_n-%0.2f_%d-%d_d-%.1f_wh-7.dat'%(U,mu,occupancy,nimp,nbath,delta)
+    filename = 'hubbard_1d_U-%.0f_mu-%0.2f_n-%0.2f_%d-%d_d-%.1f_wh-7_%s.dat'%(
+                U,mu,occupancy,nimp,nbath,delta,solver_type)
     with open(filename, 'w') as f:
         f.write('# n = %0.12g\n'%(occupancy))
         for w,freq in enumerate(freqs):
             f.write('%0.12g %.12g %.12g\n'%(freq, freq-U/2., ldos[w]))
 
-    omega_ns = np.linspace(0., 20., 64)
+    omega_ns = np.linspace(0., 20., 64)[1:]
     sigma = mydmft.get_sigma_imp(1j*omega_ns, 0.0)[0,0]
     sigma = np.imag(sigma)
-    filename = 'hubbard_1d_U-%.0f_mu-%0.2f_n-%0.2f_%d-%d_d-%.1f_wh-7_sigma.dat'%(U,mu,occupancy,nimp,nbath,delta)
+    filename = 'hubbard_1d_U-%.0f_mu-%0.2f_n-%0.2f_%d-%d_d-%.1f_wh-7_%s_sigma.dat'%(
+                U,mu,occupancy,nimp,nbath,delta,solver_type)
     with open(filename, 'w') as f:
         for n,wn in enumerate(omega_ns):
             f.write('%.12g %.12g\n'%(wn, sigma[n]))
@@ -92,11 +94,13 @@ def main():
 
     # half filling
     mu = U/2.
-    dmft_hub_1d(U,nimp,nbath,mu,delta)
+    dmft_hub_1d(U,nimp,nbath,mu,delta,'cc')
+    dmft_hub_1d(U,nimp,nbath,mu,delta,'fci')
 
     # doped
     mu = 0.
-    dmft_hub_1d(U,nimp,nbath,mu,delta)
+    dmft_hub_1d(U,nimp,nbath,mu,delta,'cc')
+    dmft_hub_1d(U,nimp,nbath,mu,delta,'fci')
 
 
 if __name__ == '__main__':
